@@ -9,6 +9,7 @@ from ccbot.handlers.message_queue import (
     MERGE_MAX_LENGTH,
     MessageTask,
     _can_merge_tasks,
+    _coalesce_status_updates,
     _merge_content_tasks,
 )
 
@@ -225,3 +226,36 @@ async def test_queue_counter_with_partial_merge() -> None:
     assert merged.parts == ["a", "b"]
     # 2 items put back; compensation (put_nowait + task_done) keeps counter stable
     assert queue.qsize() == 2
+
+
+async def test_status_coalesce_keeps_latest_same_window_thread() -> None:
+    first = MessageTask(
+        task_type="status_update",
+        text="old",
+        window_id="@1",
+        thread_id=10,
+    )
+    queue: asyncio.Queue[MessageTask] = asyncio.Queue()
+    lock = asyncio.Lock()
+
+    await queue.put(
+        MessageTask(task_type="status_update", text="mid", window_id="@1", thread_id=10)
+    )
+    await queue.put(
+        MessageTask(task_type="status_update", text="new", window_id="@1", thread_id=10)
+    )
+    await queue.put(
+        MessageTask(
+            task_type="status_update",
+            text="other-window",
+            window_id="@2",
+            thread_id=10,
+        )
+    )
+
+    selected, dropped = await _coalesce_status_updates(queue, first, lock)
+    assert selected.text == "new"
+    assert dropped == 2
+    assert queue.qsize() == 1
+    remaining = queue.get_nowait()
+    assert remaining.text == "other-window"

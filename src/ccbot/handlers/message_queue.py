@@ -227,6 +227,46 @@ async def _merge_content_tasks(
     )
 
 
+async def _coalesce_status_updates(
+    queue: asyncio.Queue[MessageTask],
+    first: MessageTask,
+    lock: asyncio.Lock,
+) -> tuple[MessageTask, int]:
+    """Keep only the latest pending status_update for the same topic/window.
+
+    Returns: (selected_task, dropped_count) where dropped_count is the number
+    of queued tasks removed and already accounted for.
+    """
+    if first.task_type != "status_update":
+        return first, 0
+
+    selected = first
+    dropped = 0
+    key = (first.thread_id or 0, first.window_id or "")
+
+    async with lock:
+        items = _inspect_queue(queue)
+        remaining: list[MessageTask] = []
+
+        for task in items:
+            if task.task_type != "status_update":
+                remaining.append(task)
+                continue
+            task_key = (task.thread_id or 0, task.window_id or "")
+            if task_key == key:
+                # Same topic/window status update; keep latest only.
+                selected = task
+                dropped += 1
+            else:
+                remaining.append(task)
+
+        for item in remaining:
+            queue.put_nowait(item)
+            queue.task_done()
+
+    return selected, dropped
+
+
 async def _message_queue_worker(bot: Bot, user_id: int) -> None:
     """Process message tasks for a user sequentially."""
     queue = _message_queues[user_id]
@@ -251,7 +291,13 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                             queue.task_done()
                     await _process_content_task(bot, user_id, merged_task)
                 elif task.task_type == "status_update":
-                    await _process_status_update_task(bot, user_id, task)
+                    collapsed_task, dropped = await _coalesce_status_updates(
+                        queue, task, lock
+                    )
+                    if dropped > 0:
+                        for _ in range(dropped):
+                            queue.task_done()
+                    await _process_status_update_task(bot, user_id, collapsed_task)
                 elif task.task_type == "status_clear":
                     await _do_clear_status_message(bot, user_id, task.thread_id or 0)
             except RetryAfter as e:
