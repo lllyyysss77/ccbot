@@ -148,7 +148,7 @@ This registers 7 Claude Code hooks (SessionStart, Notification, Stop, SubagentSt
 ccbot
 ```
 
-Open your Telegram group, create a new topic, send a message — a directory browser appears. Pick a project directory, choose your agent (Claude, Codex, or Gemini), and you're connected.
+Open your Telegram group, create a new topic, send a message — a directory browser appears. Pick a project directory, choose your agent (Claude, Codex, or Gemini), then choose session mode (`✅ Standard` or `🚀 YOLO`), and you're connected.
 
 ## Documentation
 

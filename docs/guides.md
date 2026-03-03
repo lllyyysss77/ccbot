@@ -171,11 +171,26 @@ CCBot supports multiple agent CLI backends. Each Telegram topic can use a differ
 
 ### Choosing a Provider
 
-**From Telegram**: When you create a new topic and select a directory, a provider picker appears with Claude (default), Codex, and Gemini options.
+**From Telegram**: When you create a new topic and select a directory, a provider picker appears with Claude (default), Codex, and Gemini options. After provider selection, CCBot asks for session mode:
+
+- `✅ Standard` (normal approvals)
+- `🚀 YOLO` (provider-specific permissive mode)
 
 **From the terminal**: If you create a tmux window manually and start an agent CLI, CCBot auto-detects the provider from the running process name.
 
 **Default provider**: Set `CCBOT_PROVIDER=codex` (or `gemini`) to change the default. Claude is the default if unset.
+
+### Session Mode (Standard vs YOLO)
+
+CCBot stores mode per window and reuses it for recover/continue/resume flows.
+
+- `normal` mode launches the provider command as-is.
+- `yolo` mode appends the provider-native permissive flag:
+  - Claude: `--dangerously-skip-permissions`
+  - Codex: `--dangerously-bypass-approvals-and-sandbox`
+  - Gemini: `--yolo`
+
+YOLO sessions are indicated in Telegram topic titles with a positive `🚀` badge and in `/sessions` with a `[YOLO]` tag.
 
 ### Provider Differences
 
@@ -219,6 +234,14 @@ CCBOT_GEMINI_COMMAND=/opt/gemini/run
 ```
 
 `<NAME>` is uppercase: `CLAUDE`, `CODEX`, `GEMINI`. Defaults to the provider's built-in command (`claude`, `codex`, `gemini`) when unset. New providers automatically support `CCBOT_<NAME>_COMMAND` without code changes.
+
+You can use this for a global "today" setup (all new sessions), for example:
+
+```ini
+CCBOT_CLAUDE_COMMAND=claude --dangerously-skip-permissions
+CCBOT_CODEX_COMMAND=codex --dangerously-bypass-approvals-and-sandbox
+CCBOT_GEMINI_COMMAND=gemini --yolo
+```
 
 ### Provider-Specific Commands
 
