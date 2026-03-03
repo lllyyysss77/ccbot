@@ -22,6 +22,20 @@ Add session state fields:
 2. Ensure load path is backward compatible with missing keys.
 3. Update migration logic if key semantics change (`window_resolver.py` / migration tests).
 
+Add a new slash command (agent-side):
+
+1. Add command definition to the agent's command surface (e.g. `.claude/commands/` for Claude).
+2. `command_catalog.py` discovers it on next scan (60s TTL cache; restart or wait).
+3. `cc_commands.py` registers it in the Telegram `/commands` menu automatically.
+4. No bot-side code changes needed unless the command requires special Telegram UI.
+
+Add file upload handling:
+
+1. `handlers/file_handler.py` handles photo/document messages.
+2. Files are saved to `.ccbot-uploads/` under the config directory.
+3. Agent is notified via tmux keys with the file path.
+4. Extend `file_handler.py` for new media types or post-processing.
+
 Adjust status or transcript parsing:
 
 1. Keep parsing provider-specific where possible.

@@ -46,6 +46,7 @@ The key implementation areas are:
 - runtime and startup: `src/ccbot/main.py`, `src/ccbot/cli.py`, `src/ccbot/bot.py`
 - session/state core: `src/ccbot/session.py`, `src/ccbot/session_monitor.py`
 - providers: `src/ccbot/providers/`
+- command discovery: `src/ccbot/command_catalog.py`, `src/ccbot/cc_commands.py`
 - Telegram UI handlers: `src/ccbot/handlers/`
 - tmux integration: `src/ccbot/tmux_manager.py`
 

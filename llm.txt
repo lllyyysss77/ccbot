@@ -25,6 +25,8 @@ Primary entrypoints:
 - src/ccbot/session_monitor.py (polling + outbound event flow)
 - src/ccbot/providers/ (provider contract and implementations)
 - src/ccbot/handlers/ (Telegram command/callback surface)
+- src/ccbot/command_catalog.py (provider-agnostic command discovery + caching)
+- src/ccbot/hook.py (Claude hook install/status/event writes)
 
 State and data files:
 - state.json: topic/thread bindings + window metadata
@@ -41,7 +43,8 @@ Canonical project references:
 - .claude/rules/message-handling.md
 
 Validation gate before done:
-- make fmt && make test && make lint
+- make check (runs fmt + lint + typecheck + test)
+- or individually: make fmt && make lint && make typecheck && make test
 
 Provider-specific implementation pointers:
 - src/ccbot/providers/base.py

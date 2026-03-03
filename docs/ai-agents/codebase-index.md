@@ -28,12 +28,29 @@ Telegram handler surface:
 - `src/ccbot/handlers/directory_browser.py` + `directory_callbacks.py`: new-session UX.
 - `src/ccbot/handlers/interactive_ui.py` + `interactive_callbacks.py`: interactive prompt UX.
 - `src/ccbot/handlers/sessions_dashboard.py`: `/sessions` dashboard behavior.
+- `src/ccbot/handlers/recovery_callbacks.py`: dead window recovery flow (fresh/continue/resume).
+- `src/ccbot/handlers/screenshot_callbacks.py`: screenshot refresh, Esc, quick-key, pane screenshots.
+- `src/ccbot/handlers/history_callbacks.py`: history pagination callbacks (prev/next).
+- `src/ccbot/handlers/hook_events.py`: hook event dispatcher (Notification, Stop, Subagent*, Team*).
+- `src/ccbot/handlers/cleanup.py`: centralized topic state teardown on close/delete.
+- `src/ccbot/handlers/topic_emoji.py`: debounced topic name emoji updates (active/idle/done/dead).
+- `src/ccbot/handlers/file_handler.py`: photo/document upload → `.ccbot-uploads/` → agent notification.
+- `src/ccbot/handlers/resume_command.py`: `/resume` scan past sessions + inline picker.
+- `src/ccbot/handlers/upgrade.py`: `/upgrade` uv tool upgrade + `os.execv()` restart.
+- `src/ccbot/handlers/sync_command.py`: `/sync` state audit + fix button.
+- `src/ccbot/handlers/command_history.py`: per-user/per-topic command recall (in-memory, max 20).
 
 Provider and command surface:
 
 - `src/ccbot/providers/`: provider contract and implementations.
-- `src/ccbot/cc_commands.py`: command/skill discovery and registration.
+- `src/ccbot/command_catalog.py`: provider-agnostic command discovery + 60s TTL caching.
+- `src/ccbot/cc_commands.py`: Telegram menu registration from discovered commands.
 - `src/ccbot/hook.py`: Claude hook install/status/uninstall and event writes.
+
+Supporting modules:
+
+- `src/ccbot/screenshot.py`: terminal text → PNG rendering (PIL, ANSI color, font fallback).
+- `src/ccbot/codex_status.py`: Codex status snapshot from JSONL transcripts.
 
 ## Decision Map (Where to Edit)
 
@@ -61,6 +78,15 @@ Change Telegram interactive UX:
 - `src/ccbot/handlers/interactive_ui.py` and `interactive_callbacks.py`.
 - `src/ccbot/handlers/callback_data.py` for callback key contracts.
 - `src/ccbot/handlers/message_queue.py` for ordering/merge side effects.
+
+Change command discovery:
+
+- `src/ccbot/command_catalog.py` for filesystem scanning and caching.
+- `src/ccbot/cc_commands.py` for Telegram menu registration.
+
+Change screenshot rendering:
+
+- `src/ccbot/screenshot.py` only.
 
 Change tmux behavior:
 
@@ -116,3 +142,8 @@ Symptom: interactive keyboard not shown
 Symptom: duplicated or out-of-order status/content messages
 
 - inspect merge/send behavior in `handlers/message_queue.py`.
+
+Symptom: commands menu missing/wrong
+
+- check `command_catalog.py` cache TTL and filesystem scan paths.
+- check `cc_commands.py` menu registration and provider scoping.

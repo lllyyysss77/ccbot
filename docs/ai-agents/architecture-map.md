@@ -23,12 +23,16 @@
 - `src/ccbot/providers/base.py` defines the provider contract.
 - `src/ccbot/providers/__init__.py` resolves per-window provider selection.
 - `src/ccbot/providers/{claude,codex,gemini}.py` implement provider-specific behavior.
+- `src/ccbot/command_catalog.py` discovers provider commands from filesystem (skills, custom commands) with 60s TTL caching.
+- `src/ccbot/cc_commands.py` registers discovered commands as Telegram bot menu entries.
 - `src/ccbot/interactive_prompt_formatter.py` normalizes provider interactive prompt text for Telegram readability (currently Codex edit approvals).
+- `src/ccbot/codex_status.py` extracts Codex status snapshots from JSONL transcripts.
+- `src/ccbot/screenshot.py` renders terminal text to PNG (PIL, ANSI color, font fallback).
 
 5. Integrations
 
 - `src/ccbot/tmux_manager.py` is the tmux IO boundary.
-- `src/ccbot/hook.py` writes Claude hook events and session mapping files.
+- `src/ccbot/hook.py` writes Claude hook events to both `session_map.json` and `events.jsonl`.
 
 ## Request/Response Lifecycles
 
@@ -51,6 +55,14 @@ Recovery flow (dead/missing session):
 1. `handlers/status_polling.py` detects stale/dead bindings.
 2. Recovery UI callbacks route through `handlers/recovery_callbacks.py`.
 3. Session/window state is updated in `session.py` and persisted to `state.json`.
+
+Commands menu flow (`/commands`):
+
+1. User invokes `/commands` in a topic.
+2. `handlers/` routes to command handler in `bot.py`.
+3. `command_catalog.py` discovers available commands for the window's provider (filesystem scan with 60s TTL cache).
+4. `cc_commands.py` renders the scoped command menu as inline keyboard.
+5. User selection sends the command text to the agent via `tmux_manager.py`.
 
 ## Data Model and State Files
 
