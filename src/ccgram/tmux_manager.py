@@ -175,6 +175,9 @@ class TmuxManager:
                 # Skip our own window (auto-detect mode)
                 if config.own_window_id and window_id == config.own_window_id:
                     continue
+                # Skip hidden windows (name starts with underscore)
+                if name.startswith("_"):
+                    continue
 
                 try:
                     # Get the active pane's current path, command, and dimensions
