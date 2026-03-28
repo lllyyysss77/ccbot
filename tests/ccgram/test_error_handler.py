@@ -6,7 +6,7 @@ import signal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from telegram.error import BadRequest, Conflict, TelegramError
+from telegram.error import BadRequest, Conflict, NetworkError, TelegramError
 
 from ccgram.bot import _error_handler, _send_shutdown_notification
 
@@ -15,6 +15,17 @@ def _make_context(error: BaseException) -> MagicMock:
     ctx = MagicMock()
     ctx.error = error
     return ctx
+
+
+class TestErrorHandlerNetworkError:
+    async def test_network_error_logged_as_warning(self) -> None:
+        ctx = _make_context(NetworkError("httpx.ConnectError:"))
+
+        with patch("ccgram.bot.logger") as mock_logger:
+            await _error_handler(None, ctx)
+
+        mock_logger.warning.assert_called_once()
+        mock_logger.error.assert_not_called()
 
 
 class TestErrorHandlerStaleCallback:

@@ -39,7 +39,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, Conflict, RetryAfter, TelegramError
+from telegram.error import BadRequest, Conflict, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -1904,6 +1904,11 @@ async def _error_handler(_update: object, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if isinstance(context.error, BadRequest) and "too old" in str(context.error):
         logger.debug("Callback query expired (query too old)")
+        return
+    if isinstance(context.error, NetworkError) and not isinstance(
+        context.error, BadRequest
+    ):
+        logger.warning("Transient network error (PTB will retry): %s", context.error)
         return
     logger.error("Unhandled bot error", exc_info=context.error)
 
