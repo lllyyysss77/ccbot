@@ -61,6 +61,15 @@ async def handle_spawn_approval(
         logger.info("Spawn request %s expired before approval", request_id)
         return None
 
+    from ..config import config
+    from ..spawn_request import check_max_windows
+
+    if not check_max_windows(session_manager.window_states, config.msg_max_windows):
+        spawn_file = _spawns_dir() / f"{request_id}.json"
+        spawn_file.unlink(missing_ok=True)
+        logger.warning("Spawn request %s denied: max windows reached", request_id)
+        return None
+
     launch_command = resolve_launch_command(req.provider)
 
     success, message, window_name, window_id = await tmux_manager.create_window(

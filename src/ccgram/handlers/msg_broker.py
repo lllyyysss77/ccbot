@@ -70,6 +70,7 @@ class MessageDeliveryStrategy:
 
     def __init__(self) -> None:
         self._states: dict[str, DeliveryState] = {}
+        self._crash_recovery_done = False
 
     def get_state(self, window_id: str) -> DeliveryState:
         return self._states.setdefault(window_id, DeliveryState())
@@ -294,6 +295,25 @@ def _format_for_delivery(msg: "Message", mailbox_dir: Path, qualified_id: str) -
     )
 
 
+def _recover_stale_pending(mailbox: "Mailbox") -> None:
+    """Mark stale pending messages as delivered on first broker cycle.
+
+    Handles crash recovery: if the bot crashed after send_keys but before
+    mark_delivered, these messages would otherwise be injected again.
+    """
+    if delivery_strategy._crash_recovery_done:
+        return
+    delivery_strategy._crash_recovery_done = True
+    stale = mailbox.pending_undelivered(min_age_seconds=5.0)
+    for msg in stale:
+        mailbox.mark_delivered(msg.id, msg.to_id)
+        logger.info(
+            "Crash recovery: marked stale pending message as delivered",
+            msg_id=msg.id,
+            to_id=msg.to_id,
+        )
+
+
 async def broker_delivery_cycle(
     mailbox: "Mailbox",
     tmux_mgr: "TmuxManager",
@@ -314,6 +334,8 @@ async def broker_delivery_cycle(
     """
     from ..providers import get_provider_for_window
     from ..window_resolver import is_foreign_window
+
+    _recover_stale_pending(mailbox)
 
     delivered_count = 0
 
@@ -358,7 +380,7 @@ async def broker_delivery_cycle(
                 window_id=qualified_id,
                 count=len(to_deliver),
             )
-            await _notify_delivered(bot, qualified_id, to_deliver)
+            await _notify_delivered(bot, qualified_id, to_deliver, mailbox)
             await _notify_senders(bot, qualified_id, to_deliver)
 
     # Process pending spawn requests
@@ -369,32 +391,57 @@ async def broker_delivery_cycle(
 
 
 async def _notify_delivered(
-    bot: "Bot | None", to_window: str, messages: list["Message"]
+    bot: "Bot | None",
+    to_window: str,
+    messages: list["Message"],
+    mailbox: "Mailbox | None" = None,
 ) -> None:
     """Send Telegram notification for delivered messages (if bot available)."""
     if bot is None:
         return
-    from .msg_telegram import notify_messages_delivered
+    from .msg_telegram import notify_messages_delivered, notify_reply_received
 
     try:
         await notify_messages_delivered(bot, to_window, messages)
     except OSError, TelegramError:
         logger.debug("Failed to send delivery notification", window=to_window)
 
+    if mailbox is not None:
+        for msg in messages:
+            if msg.type == "reply" and msg.reply_to:
+                try:
+                    original = mailbox.get(msg.reply_to, msg.from_id)
+                    if original is not None:
+                        await notify_reply_received(bot, original, msg)
+                except OSError, TelegramError:
+                    logger.debug("Failed to send reply notification", msg_id=msg.id)
+
 
 async def _notify_senders(
-    bot: "Bot | None", to_window: str, messages: list["Message"]
+    bot: "Bot | None",
+    to_window: str,
+    messages: list["Message"],
 ) -> None:
     """Notify each sender's Telegram topic that their message was delivered."""
     if bot is None:
         return
-    from .msg_telegram import notify_message_sent
+    from .msg_telegram import notify_broadcast_sent, notify_message_sent
 
+    broadcast_by_sender: dict[str, list["Message"]] = {}
     for msg in messages:
         try:
             await notify_message_sent(bot, msg.from_id, to_window, msg)
         except OSError, TelegramError:
             logger.debug("Failed to send sender notification", from_id=msg.from_id)
+        if msg.type == "broadcast":
+            broadcast_by_sender.setdefault(msg.from_id, []).append(msg)
+
+    for from_id, bc_msgs in broadcast_by_sender.items():
+        try:
+            recipients = [m.to_id for m in bc_msgs]
+            await notify_broadcast_sent(bot, from_id, recipients, bc_msgs[0])
+        except OSError, TelegramError:
+            logger.debug("Failed to send broadcast notification", from_id=from_id)
 
 
 async def _notify_loop(bot: "Bot | None", window_a: str, window_b: str) -> None:

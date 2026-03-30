@@ -260,6 +260,11 @@ class Mailbox:
             messages.append(msg)
         return messages
 
+    def get(self, msg_id: str, window_id: str) -> Message | None:
+        """Look up a message without modifying it. Returns None if not found."""
+        msg, _ = self._find_message(msg_id, window_id)
+        return msg
+
     def read(self, msg_id: str, window_id: str) -> Message | None:
         """Mark a message as read. Returns the updated message or None if not found."""
         msg, path = self._find_message(msg_id, window_id)

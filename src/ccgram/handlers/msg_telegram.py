@@ -47,8 +47,9 @@ _WINDOW_KEY_PARTS = 2
 _SUBJECT_MAX_LEN = 40
 _BODY_PREVIEW_LEN = 100
 _MAX_DISPLAYED_RECIPIENTS = 5
+_MAX_LOOP_ALERT_PAIRS = 100
 
-# Map short hash ��� (window_a, window_b) for loop alert callback data.
+# Map short hash → (window_a, window_b) for loop alert callback data.
 # Telegram limits callback_data to 64 bytes; qualified IDs can be long.
 _loop_alert_pairs: dict[str, tuple[str, str]] = {}
 
@@ -364,6 +365,9 @@ async def notify_loop_detected(
     # Hash the pair to fit within 64-byte callback_data limit
     pair_full = f"{window_a}|{window_b}"
     pair_hash = hashlib.md5(pair_full.encode()).hexdigest()[:12]  # noqa: S324
+    if len(_loop_alert_pairs) >= _MAX_LOOP_ALERT_PAIRS:
+        oldest_key = next(iter(_loop_alert_pairs))
+        del _loop_alert_pairs[oldest_key]
     _loop_alert_pairs[pair_hash] = (window_a, window_b)
 
     text = (
