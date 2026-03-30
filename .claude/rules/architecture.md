@@ -108,6 +108,10 @@ graph TB
 | `utils.py`         | Shared utilities (ccgram_dir, tmux_session_name, atomic_write_json)              |
 | `protocols.py`     | Protocol classes (WindowStateStore, UserPreferences, SessionResolver)            |
 | `thread_router.py` | ThreadRouter — thread bindings, display names, reverse index, chat ID resolution |
+| `mailbox.py`       | File-based mailbox: message CRUD, TTL expiration, sweep, ID migration, broadcast |
+| `msg_cmd.py`       | `ccgram msg` CLI group: send, inbox, read, reply, broadcast, register, spawn     |
+| `msg_discovery.py` | Peer discovery: view over SessionManager + self-declared overlay (task, team)    |
+| `msg_skill.py`     | Messaging skill auto-installation for Claude Code agents                         |
 
 ### Handler modules (`handlers/`)
 
@@ -148,15 +152,19 @@ graph TB
 | `user_state.py`            | context.user_data string key constants                                                       |
 | `shell_commands.py`        | NL→command approval, dangerous command detection via LLM, prompt marker offer UI             |
 | `shell_capture.py`         | Prompt-marker output isolation, exit code detection, baseline-diff fallback, glyph stripping |
+| `msg_broker.py`            | Broker delivery: idle detection, send_keys injection, rate limiting, loop detection          |
+| `msg_telegram.py`          | Telegram notifications for inter-agent messages (silent, grouped, edit-in-place)             |
+| `msg_spawn.py`             | Agent spawn requests with Telegram approval flow and auto-topic creation                     |
 
 ### State files (`~/.ccgram/` or `$CCBOT_DIR/`)
 
-| File                 | Description                                                    |
-| -------------------- | -------------------------------------------------------------- |
-| `state.json`         | Thread bindings + window states + display names + read offsets |
-| `session_map.json`   | Hook-generated window_id→session mapping                       |
-| `events.jsonl`       | Append-only hook event log (all hook events)                   |
-| `monitor_state.json` | Poll progress (byte offset) per JSONL file                     |
+| File                 | Description                                                      |
+| -------------------- | ---------------------------------------------------------------- |
+| `state.json`         | Thread bindings + window states + display names + read offsets   |
+| `session_map.json`   | Hook-generated window_id→session mapping                         |
+| `events.jsonl`       | Append-only hook event log (all hook events)                     |
+| `monitor_state.json` | Poll progress (byte offset) per JSONL file                       |
+| `mailbox/`           | Inter-agent message inboxes (per-window dirs with JSON messages) |
 
 ## Key Design Decisions
 
@@ -171,4 +179,5 @@ graph TB
 - Notifications delivered to users via thread bindings (topic → window_id → session).
 - **Startup re-resolution** — Window IDs reset on tmux server restart. On startup, `resolve_stale_ids()` matches persisted display names against live windows to re-map IDs. Old state.json files keyed by window name are auto-migrated.
 - **Per-window provider** — All CLI-specific behavior (launch args, transcript parsing, terminal status, command discovery) is delegated to an `AgentProvider` protocol. Providers declare capabilities (`ProviderCapabilities`) that gate UX features per-window: hook checks, resume/continue buttons, and command registration. Each window stores its `provider_name` in `WindowState`; `get_provider_for_window(window_id)` resolves the correct provider instance, falling back to the config default. Externally created windows are auto-detected via `detect_provider_from_command(pane_current_command)`. The global `get_provider()` singleton remains for CLI commands (`doctor`, `status`) that lack window context.
+- **Inter-agent messaging** — File-based mailbox system (`~/.ccgram/mailbox/`) with per-window inbox directories. Qualified IDs (`session:@N`) match session_map convention. Broker delivery injects messages into idle windows via send_keys; shell windows are inbox-only. Telegram notifications are silent and grouped. Spawn approval requires Telegram keyboard confirmation. `CCGRAM_WINDOW_ID` env var set on window creation for agent self-identification.
 - **Foreign window support (emdash)** — Windows owned by external tools (emdash) use qualified IDs like `emdash-claude-main-abc123:@0` which are valid tmux `-t` targets. Foreign windows are marked `WindowState.external=True` and are never killed by ccgram. Discovery via `tmux list-sessions` filtered by `emdash-` prefix. The `window_resolver` preserves foreign entries during startup re-resolution. All tmux operations (send_keys, capture_pane) route foreign IDs through subprocess instead of libtmux.

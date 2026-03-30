@@ -489,9 +489,9 @@ Ensure agents can identify their own window ID for CLI operations.
 
 ### Task 12: Update documentation
 
-- [ ] update `CLAUDE.md` with `ccgram msg` command reference and design summary
-- [ ] update `docs/plans/` — mark this plan complete
-- [ ] add messaging section to architecture rule file (`.claude/rules/architecture.md`)
+- [x] update `CLAUDE.md` with `ccgram msg` command reference and design summary
+- [x] update `docs/plans/` — mark this plan complete
+- [x] add messaging section to architecture rule file (`.claude/rules/architecture.md`)
 
 ## Technical Details
 
