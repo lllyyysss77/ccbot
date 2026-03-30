@@ -15,6 +15,7 @@ import asyncio
 import functools
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from ccgram.providers._jsonl import JsonlProvider
@@ -61,15 +62,53 @@ def _compile_replace_re(prefix: str) -> re.Pattern[str]:
 _WRAP_RE = re.compile(r"⌘(\d+)⌘\s?(.*)$")
 
 
-def match_prompt(line: str) -> re.Match[str] | None:
+@dataclass(frozen=True)
+class PromptMatch:
+    """Typed result from prompt marker matching.
+
+    Replaces raw ``re.Match`` group access with named fields so consumers
+    never depend on regex internals.
+    """
+
+    sequence_number: int
+    """Monotonic counter (exit code of the last command)."""
+
+    trailing_text: str
+    """Command text after the marker (empty string when the shell is idle)."""
+
+    exit_code: int
+    """Exit code of the last command (same value as *sequence_number*)."""
+
+    raw_line: str
+    """Original terminal line that matched."""
+
+
+def _match_to_prompt_match(m: re.Match[str], line: str) -> PromptMatch:
+    """Convert a regex match into a typed ``PromptMatch``."""
+    num = int(m.group(1))
+    return PromptMatch(
+        sequence_number=num,
+        trailing_text=m.group(2),
+        exit_code=num,
+        raw_line=line,
+    )
+
+
+def match_prompt(line: str) -> PromptMatch | None:
     """Match a prompt marker in *line*, respecting the current prompt mode.
 
     In ``replace`` mode the marker is at line start (``re.match``).
     In ``wrap`` mode the marker can appear anywhere (``re.search``).
+
+    Returns a typed ``PromptMatch`` or ``None``.
     """
     if _get_prompt_mode() == "replace":
-        return _compile_replace_re(_get_marker_prefix()).match(line)
-    return _WRAP_RE.search(line)
+        m = _compile_replace_re(_get_marker_prefix()).match(line)
+    else:
+        m = _WRAP_RE.search(line)
+    if m is None:
+        return None
+    return _match_to_prompt_match(m, line)
 
 
 KNOWN_SHELLS = frozenset({"bash", "zsh", "fish", "sh", "dash", "tcsh", "csh", "ksh"})
@@ -119,9 +158,11 @@ def _wrap_setup_commands(shell: str) -> str:
     # Uses set_color instead of raw ANSI — avoids escape mangling via send_keys.
     # Guard: skip if __ccgram_orig_prompt already exists (idempotent).
     # Embedded clear hides the setup command from the user.
+    # Use `builtin functions` to avoid false errors from fish plugins
+    # (e.g. abbr_tips runs argparse on any command starting with "functions").
     fish = (
-        "functions --query __ccgram_orig_prompt; or begin; "
-        "functions --copy fish_prompt __ccgram_orig_prompt 2>/dev/null; "
+        "builtin functions --query __ccgram_orig_prompt; or begin; "
+        "builtin functions --copy fish_prompt __ccgram_orig_prompt 2>/dev/null; "
         "or function __ccgram_orig_prompt; end; "
         "function fish_prompt; "
         "set -l __s $status; "

@@ -29,10 +29,12 @@ from telegram.ext import ContextTypes
 from ..config import config
 from ..providers import get_provider, get_provider_for_window, resolve_launch_command
 from ..session import session_manager
+from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from ..utils import read_session_metadata_from_jsonl
 from .callback_data import CB_RESUME_CANCEL, CB_RESUME_PAGE, CB_RESUME_PICK
 from .callback_helpers import get_thread_id
+from .callback_registry import register
 from .message_sender import safe_edit, safe_reply
 from .topic_emoji import format_topic_name_for_mode
 from .user_state import RESUME_SESSIONS
@@ -230,7 +232,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Check resume capability using per-window provider (or global fallback)
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     provider = get_provider_for_window(window_id) if window_id else get_provider()
     if not provider.capabilities.supports_resume:
         await safe_reply(
@@ -285,10 +287,10 @@ async def _create_resume_window(
 
     Returns (success, message, window_name, window_id).
     """
-    old_window_id = session_manager.get_window_for_thread(user_id, thread_id)
+    old_window_id = thread_router.get_window_for_thread(user_id, thread_id)
     if old_window_id:
-        session_manager.unbind_thread(user_id, thread_id)
-        from .status_polling import clear_dead_notification
+        thread_router.unbind_thread(user_id, thread_id)
+        from .polling_strategies import clear_dead_notification
 
         clear_dead_notification(user_id, thread_id)
 
@@ -358,19 +360,19 @@ async def _handle_pick(
         await query.answer("Failed")
         return
 
-    session_manager.bind_thread(
+    thread_router.bind_thread(
         user_id, thread_id, created_wid, window_name=created_wname
     )
 
     # Store group chat_id for routing
     chat = query.message.chat if query.message else None
     if chat and chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user_id, thread_id, chat.id)
+        thread_router.set_group_chat_id(user_id, thread_id, chat.id)
 
     # Rename topic to match the window
     try:
         await context.bot.edit_forum_topic(
-            chat_id=session_manager.resolve_chat_id(user_id, thread_id),
+            chat_id=thread_router.resolve_chat_id(user_id, thread_id),
             message_thread_id=thread_id,
             name=format_topic_name_for_mode(
                 created_wname, session_manager.get_approval_mode(created_wid)
@@ -432,3 +434,14 @@ def _clear_resume_state(user_data: dict | None) -> None:
     if user_data is None:
         return
     user_data.pop(RESUME_SESSIONS, None)
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(CB_RESUME_PICK, CB_RESUME_PAGE, CB_RESUME_CANCEL)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    assert query is not None and query.data is not None and user is not None
+    await handle_resume_command_callback(query, user.id, query.data, update, context)

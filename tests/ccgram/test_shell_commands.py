@@ -1,5 +1,3 @@
-"""Tests for shell command generation and approval flow."""
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -168,7 +166,7 @@ class TestHandleShellMessage:
             patch(f"{_MOD}.enqueue_status_update", new_callable=AsyncMock),
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", return_value=mock_completer),
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_reply", new_callable=AsyncMock),
             patch(
@@ -177,7 +175,7 @@ class TestHandleShellMessage:
                 return_value={"cwd": "/tmp", "shell": "bash", "shell_tools": ""},
             ),
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             mock_tm.capture_pane = AsyncMock(return_value="$ ")
 
             await handle_shell_message(
@@ -204,6 +202,7 @@ class TestHandleShellMessage:
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", return_value=mock_completer),
             patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_send", new_callable=AsyncMock) as mock_send,
             patch(
@@ -212,7 +211,7 @@ class TestHandleShellMessage:
                 return_value={"cwd": "/tmp", "shell": "bash", "shell_tools": ""},
             ),
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             mock_tm.capture_pane = AsyncMock(return_value="$ ")
 
             await handle_shell_message(bot, 1, 42, "@0", "do something", message)
@@ -229,9 +228,10 @@ class TestHandleShellMessage:
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", side_effect=ValueError("bad provider")),
             patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_send", new_callable=AsyncMock) as mock_send,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             await handle_shell_message(bot, 1, 42, "@0", "do something")
 
             mock_send.assert_called_once()
@@ -246,6 +246,7 @@ class TestHandleShellMessage:
             patch(f"{_MOD}.enqueue_status_update", new_callable=AsyncMock),
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_send", new_callable=AsyncMock) as mock_send,
             patch(
                 "ccgram.providers.shell.has_prompt_marker",
@@ -254,7 +255,7 @@ class TestHandleShellMessage:
             ),
         ):
             mock_sm.send_to_window = AsyncMock(return_value=(False, "Window not found"))
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
 
             await handle_shell_message(bot, 1, 42, "@0", "!ls", message)
 
@@ -273,7 +274,7 @@ class TestHandleShellMessage:
             patch(f"{_MOD}.enqueue_status_update", new_callable=AsyncMock),
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", return_value=mock_completer),
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_send", new_callable=AsyncMock) as mock_send,
             patch(
@@ -282,7 +283,7 @@ class TestHandleShellMessage:
                 return_value={"cwd": "/tmp", "shell": "bash", "shell_tools": ""},
             ),
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             mock_tm.capture_pane = AsyncMock(return_value="$ ")
 
             await handle_shell_message(bot, 1, 42, "@0", "list files")
@@ -298,12 +299,13 @@ class TestHandleShellCallback:
 
         with (
             patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock),
             patch("ccgram.handlers.shell_capture.mark_telegram_command") as mock_mark,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
-            mock_sm.get_window_for_thread.return_value = "@0"
+            mock_tr.resolve_chat_id.return_value = -100
+            mock_tr.get_window_for_thread.return_value = "@0"
             mock_sm.send_to_window = AsyncMock(return_value=(True, ""))
             mock_tm.find_window_by_id = AsyncMock(return_value=None)
             mock_tm.capture_pane = AsyncMock(return_value=None)
@@ -322,10 +324,10 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             _shell_pending[(-100, 42)] = ("ls -la", 999)
 
             await handle_shell_callback(query, 1, f"{CB_SHELL_RUN}@0", bot, 42)
@@ -338,10 +340,10 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             _shell_pending[(-100, 42)] = ("rm -rf /", 999)
 
             await handle_shell_callback(
@@ -356,11 +358,11 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
-            mock_sm.get_window_for_thread.return_value = None
+            mock_tr.resolve_chat_id.return_value = -100
+            mock_tr.get_window_for_thread.return_value = None
             _shell_pending[(-100, 42)] = ("ls -la", 1)
 
             await handle_shell_callback(query, 1, f"{CB_SHELL_RUN}@0", bot, 42)
@@ -374,10 +376,10 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
 
             await handle_shell_callback(query, 1, f"{CB_SHELL_RUN}@0", bot, 42)
 
@@ -390,10 +392,10 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             _shell_pending[(-100, 42)] = ("rm -rf /", 1)
 
             await handle_shell_callback(query, 1, f"{CB_SHELL_CANCEL}@0", bot, 42)
@@ -409,10 +411,10 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             _shell_pending[(-100, 42)] = ("grep -r pattern .", 1)
 
             await handle_shell_callback(query, 1, f"{CB_SHELL_EDIT}@0", bot, 42)
@@ -427,10 +429,10 @@ class TestHandleShellCallback:
         bot = AsyncMock(spec=Bot)
 
         with (
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock) as mock_edit,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
 
             await handle_shell_callback(query, 1, f"{CB_SHELL_EDIT}@0", bot, 42)
 
@@ -453,11 +455,12 @@ class TestHandleShellCallback:
 
         with (
             patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.safe_edit", new_callable=AsyncMock),
             patch("ccgram.handlers.shell_capture.mark_telegram_command"),
         ):
-            mock_sm.resolve_chat_id.return_value = -100
-            mock_sm.get_window_for_thread.return_value = "@0"
+            mock_tr.resolve_chat_id.return_value = -100
+            mock_tr.get_window_for_thread.return_value = "@0"
             mock_sm.send_to_window = AsyncMock(return_value=(True, ""))
             _shell_pending[(-100, 42)] = ("rm -rf /tmp/test", 1)
 
@@ -802,7 +805,7 @@ class TestGenerationCounter:
             patch(f"{_MOD}.enqueue_status_update", new_callable=AsyncMock),
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", return_value=mock_completer),
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_reply", new_callable=AsyncMock),
             patch(f"{_MOD}.safe_send", new_callable=AsyncMock),
@@ -812,7 +815,7 @@ class TestGenerationCounter:
                 return_value={"cwd": "/tmp", "shell": "bash", "shell_tools": ""},
             ),
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             mock_tm.capture_pane = AsyncMock(return_value="$ ")
 
             await handle_shell_message(bot, 1, 42, "@0", "first command", message)
@@ -832,7 +835,7 @@ class TestGenerationCounter:
             patch(f"{_MOD}.enqueue_status_update", new_callable=AsyncMock),
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", return_value=mock_completer),
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_send", new_callable=AsyncMock),
             patch(
@@ -841,7 +844,7 @@ class TestGenerationCounter:
                 return_value={"cwd": "/tmp", "shell": "bash", "shell_tools": ""},
             ),
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             mock_tm.capture_pane = AsyncMock(return_value="$ ")
 
             await handle_shell_message(bot, 1, 42, "@0", "first")
@@ -865,7 +868,7 @@ class TestCommandHistoryRecording:
             patch(f"{_MOD}.enqueue_status_update", new_callable=AsyncMock),
             patch(f"{_MOD}.clear_probe_failures"),
             patch(f"{_MOD}.get_completer", return_value=mock_completer),
-            patch(f"{_MOD}.session_manager") as mock_sm,
+            patch(f"{_MOD}.thread_router") as mock_tr,
             patch(f"{_MOD}.tmux_manager") as mock_tm,
             patch(f"{_MOD}.safe_reply", new_callable=AsyncMock),
             patch(
@@ -875,7 +878,7 @@ class TestCommandHistoryRecording:
             ),
             patch("ccgram.handlers.command_history.record_command") as mock_record,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             mock_tm.capture_pane = AsyncMock(return_value="$ ")
 
             await handle_shell_message(

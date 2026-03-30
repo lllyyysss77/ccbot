@@ -25,6 +25,7 @@ from telegram.ext import ContextTypes
 
 from ..providers import registry as provider_registry
 from ..session import session_manager
+from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_DIR_CANCEL,
@@ -49,6 +50,7 @@ from .directory_browser import (
     clear_browse_state,
     get_favorites,
 )
+from .callback_registry import register
 from .message_sender import safe_edit, safe_send
 from .topic_emoji import format_topic_name_for_mode
 from .user_state import PENDING_THREAD_ID, PENDING_THREAD_TEXT
@@ -356,9 +358,9 @@ async def _handle_confirm(
 
     # Guard against double-click: if thread already has a window, skip
     if pending_thread_id is not None:
-        existing_wid = session_manager.get_window_for_thread(user_id, pending_thread_id)
+        existing_wid = thread_router.get_window_for_thread(user_id, pending_thread_id)
         if existing_wid is not None:
-            display = session_manager.get_display_name(existing_wid)
+            display = thread_router.get_display_name(existing_wid)
             logger.warning(
                 "Thread %d already bound to window %s (%s), ignoring duplicate confirm",
                 pending_thread_id,
@@ -397,9 +399,9 @@ async def _validate_provider_select(
 
     # Guard against double-click: if thread already has a window, skip
     if pending_thread_id is not None:
-        existing_wid = session_manager.get_window_for_thread(user_id, pending_thread_id)
+        existing_wid = thread_router.get_window_for_thread(user_id, pending_thread_id)
         if existing_wid is not None:
-            display = session_manager.get_display_name(existing_wid)
+            display = thread_router.get_display_name(existing_wid)
             logger.warning(
                 "Thread %d already bound to window %s (%s), ignoring duplicate provider select",
                 pending_thread_id,
@@ -536,6 +538,15 @@ async def _create_window_and_bind(
         await _wait_for_shell_ready(created_wid)
         await setup_shell_prompt(created_wid)
 
+    if pending_thread_id is not None:
+        thread_router.bind_thread(
+            user_id, pending_thread_id, created_wid, window_name=created_wname
+        )
+        query_message = query.message
+        chat = query_message.chat if query_message else None
+        if chat and chat.type in ("group", "supergroup"):
+            thread_router.set_group_chat_id(user_id, pending_thread_id, chat.id)
+
     if provider_registry.get(provider_name).capabilities.supports_hook:
         await session_manager.wait_for_session_map_entry(created_wid)
 
@@ -543,17 +554,9 @@ async def _create_window_and_bind(
         await safe_edit(query, f"✅ {message}")
         return
 
-    session_manager.bind_thread(
-        user_id, pending_thread_id, created_wid, window_name=created_wname
-    )
-    query_message = query.message
-    chat = query_message.chat if query_message else None
-    if chat and chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user_id, pending_thread_id, chat.id)
-
     try:
         await context.bot.edit_forum_topic(
-            chat_id=session_manager.resolve_chat_id(user_id, pending_thread_id),
+            chat_id=thread_router.resolve_chat_id(user_id, pending_thread_id),
             message_thread_id=pending_thread_id,
             name=format_topic_name_for_mode(created_wname, approval_mode),
         )
@@ -598,7 +601,7 @@ async def _create_window_and_bind(
                 logger.warning("Failed to forward pending text: %s", send_msg)
                 await safe_send(
                     context.bot,
-                    session_manager.resolve_chat_id(user_id, pending_thread_id),
+                    thread_router.resolve_chat_id(user_id, pending_thread_id),
                     f"❌ Failed to send pending message: {send_msg}",
                     message_thread_id=pending_thread_id,
                 )
@@ -667,3 +670,25 @@ async def _handle_cancel(
         context.user_data.pop(PENDING_THREAD_TEXT, None)
     await safe_edit(query, "Cancelled")
     await query.answer("Cancelled")
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(
+    CB_DIR_FAV,
+    CB_DIR_STAR,
+    CB_DIR_SELECT,
+    CB_DIR_UP,
+    CB_DIR_HOME,
+    CB_DIR_PAGE,
+    CB_DIR_CONFIRM,
+    CB_PROV_SELECT,
+    CB_MODE_SELECT,
+    CB_DIR_CANCEL,
+)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    assert query is not None and query.data is not None and user is not None
+    await handle_directory_callback(query, user.id, query.data, update, context)

@@ -11,14 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccgram.bot import _handle_new_window
+from ccgram.handlers.topic_orchestration import handle_new_window as _handle_new_window
 from ccgram.session import SessionManager
+from ccgram.thread_router import thread_router
 from ccgram.session_monitor import NewWindowEvent, SessionMonitor
 
 
 @pytest.fixture
 def sm(monkeypatch: pytest.MonkeyPatch) -> SessionManager:
     """SessionManager with disk I/O disabled."""
+    thread_router.reset()
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
     monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
     return SessionManager()
@@ -52,8 +54,8 @@ class TestNewWindowSyncWithBindings:
         new_window = "@7"
         new_thread = 77
 
-        sm.thread_bindings = {user_id: {existing_thread: existing_window}}
-        sm.group_chat_ids = {f"{user_id}:{existing_thread}": group_chat}
+        thread_router.thread_bindings = {user_id: {existing_thread: existing_window}}
+        thread_router.group_chat_ids = {f"{user_id}:{existing_thread}": group_chat}
 
         bot = AsyncMock()
         bot.create_forum_topic = AsyncMock(return_value=_make_topic(new_thread))
@@ -63,8 +65,8 @@ class TestNewWindowSyncWithBindings:
         async def on_new_window(event: NewWindowEvent) -> None:
             captured_events.append(event)
             with (
-                patch("ccgram.bot.session_manager", sm),
-                patch("ccgram.bot.config") as mock_config,
+                patch("ccgram.handlers.topic_orchestration.session_manager", sm),
+                patch("ccgram.handlers.topic_orchestration.config") as mock_config,
             ):
                 mock_config.group_id = None
                 mock_config.allowed_users = {user_id}
@@ -110,7 +112,7 @@ class TestNewWindowSyncWithBindings:
 
         assert sm.get_window_for_thread(user_id, new_thread) == new_window
         assert sm.resolve_chat_id(user_id, new_thread) == group_chat
-        assert sm.window_display_names.get(new_window) == "new-project"
+        assert thread_router.window_display_names.get(new_window) == "new-project"
 
     async def test_multiple_groups_get_separate_topics(
         self, monitor: SessionMonitor, sm: SessionManager
@@ -119,8 +121,8 @@ class TestNewWindowSyncWithBindings:
         group_a, group_b = -100100, -100200
         new_window = "@9"
 
-        sm.thread_bindings = {user_a: {1: "@1"}, user_b: {2: "@2"}}
-        sm.group_chat_ids = {
+        thread_router.thread_bindings = {user_a: {1: "@1"}, user_b: {2: "@2"}}
+        thread_router.group_chat_ids = {
             f"{user_a}:1": group_a,
             f"{user_b}:2": group_b,
         }
@@ -133,8 +135,8 @@ class TestNewWindowSyncWithBindings:
 
         async def on_new_window(event: NewWindowEvent) -> None:
             with (
-                patch("ccgram.bot.session_manager", sm),
-                patch("ccgram.bot.config") as mock_config,
+                patch("ccgram.handlers.topic_orchestration.session_manager", sm),
+                patch("ccgram.handlers.topic_orchestration.config") as mock_config,
             ):
                 mock_config.group_id = None
                 mock_config.allowed_users = {user_a, user_b}
@@ -182,8 +184,8 @@ class TestNewWindowSyncColdStart:
 
         async def on_new_window(event: NewWindowEvent) -> None:
             with (
-                patch("ccgram.bot.session_manager", sm),
-                patch("ccgram.bot.config") as mock_config,
+                patch("ccgram.handlers.topic_orchestration.session_manager", sm),
+                patch("ccgram.handlers.topic_orchestration.config") as mock_config,
             ):
                 mock_config.group_id = group_id
                 mock_config.allowed_users = {user_id}
@@ -219,8 +221,8 @@ class TestNewWindowSyncColdStart:
 
         async def on_new_window(event: NewWindowEvent) -> None:
             with (
-                patch("ccgram.bot.session_manager", sm),
-                patch("ccgram.bot.config") as mock_config,
+                patch("ccgram.handlers.topic_orchestration.session_manager", sm),
+                patch("ccgram.handlers.topic_orchestration.config") as mock_config,
             ):
                 mock_config.group_id = None
                 mock_config.allowed_users = set()
@@ -246,7 +248,7 @@ class TestNewWindowSyncColdStart:
             await monitor._detect_and_cleanup_changes()
 
         bot.create_forum_topic.assert_not_called()
-        assert sm.thread_bindings == {}
+        assert thread_router.thread_bindings == {}
 
 
 class TestNewWindowSyncEdgeCases:
@@ -259,15 +261,16 @@ class TestNewWindowSyncEdgeCases:
         window_id = "@5"
         thread_id = 10
 
-        sm.thread_bindings = {user_id: {thread_id: window_id}}
-        sm.group_chat_ids = {f"{user_id}:{thread_id}": -100100}
+        thread_router.thread_bindings = {user_id: {thread_id: window_id}}
+        thread_router._rebuild_reverse_index()
+        thread_router.group_chat_ids = {f"{user_id}:{thread_id}": -100100}
 
         bot = AsyncMock()
 
         async def on_new_window(event: NewWindowEvent) -> None:
             with (
-                patch("ccgram.bot.session_manager", sm),
-                patch("ccgram.bot.config") as mock_config,
+                patch("ccgram.handlers.topic_orchestration.session_manager", sm),
+                patch("ccgram.handlers.topic_orchestration.config") as mock_config,
             ):
                 mock_config.group_id = -100100
                 mock_config.allowed_users = {user_id}
@@ -306,8 +309,8 @@ class TestNewWindowSyncEdgeCases:
 
         async def on_new_window(event: NewWindowEvent) -> None:
             with (
-                patch("ccgram.bot.session_manager", sm),
-                patch("ccgram.bot.config") as mock_config,
+                patch("ccgram.handlers.topic_orchestration.session_manager", sm),
+                patch("ccgram.handlers.topic_orchestration.config") as mock_config,
             ):
                 mock_config.group_id = group_id
                 mock_config.allowed_users = {user_id}

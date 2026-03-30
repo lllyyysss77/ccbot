@@ -1,5 +1,3 @@
-"""Tests for /resume command (TASK-011)."""
-
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -370,7 +368,6 @@ class TestBuildResumeKeyboard:
     def test_session_buttons(self) -> None:
         sessions = self._sessions(2)
         kb = _build_resume_keyboard(sessions)
-        # First row: project header, then 2 session rows, then nav row
         assert len(kb.inline_keyboard) == 4
         assert kb.inline_keyboard[1][0].callback_data == f"{CB_RESUME_PICK}0"
         assert kb.inline_keyboard[2][0].callback_data == f"{CB_RESUME_PICK}1"
@@ -521,6 +518,7 @@ class TestResumeCommand:
 
 class TestResumePickCallback:
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -529,14 +527,15 @@ class TestResumePickCallback:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = None
+        mock_tr.get_window_for_thread.return_value = None
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
@@ -560,11 +559,12 @@ class TestResumePickCallback:
             agent_args="--resume a1b2c3d4-0000-0000-0000-000000000001",
             launch_command="claude",
         )
-        mock_sm.bind_thread.assert_called_once_with(
+        mock_tr.bind_thread.assert_called_once_with(
             100, 42, "@5", window_name="project"
         )
 
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -573,14 +573,15 @@ class TestResumePickCallback:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = "@0"
+        mock_tr.get_window_for_thread.return_value = "@0"
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
@@ -599,7 +600,7 @@ class TestResumePickCallback:
             mock_path.return_value.is_dir.return_value = True
             await handle_resume_command_callback(query, 100, query.data, update, ctx)
 
-        mock_sm.unbind_thread.assert_called_once_with(100, 42)
+        mock_tr.unbind_thread.assert_called_once_with(100, 42)
 
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -685,6 +686,7 @@ class TestResumePickCallback:
         query.answer.assert_called_once()
 
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -693,14 +695,15 @@ class TestResumePickCallback:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = None
+        mock_tr.get_window_for_thread.return_value = None
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}1")
         user_data: dict = {
@@ -731,6 +734,7 @@ class TestResumePickCallback:
         )
 
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -739,14 +743,15 @@ class TestResumePickCallback:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = None
+        mock_tr.get_window_for_thread.return_value = None
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
@@ -765,9 +770,10 @@ class TestResumePickCallback:
             mock_path.return_value.is_dir.return_value = True
             await handle_resume_command_callback(query, 100, query.data, update, ctx)
 
-        mock_sm.set_group_chat_id.assert_called_once_with(100, 42, -100999)
+        mock_tr.set_group_chat_id.assert_called_once_with(100, 42, -100999)
 
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -776,14 +782,15 @@ class TestResumePickCallback:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = None
+        mock_tr.get_window_for_thread.return_value = None
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
@@ -805,6 +812,7 @@ class TestResumePickCallback:
         assert RESUME_SESSIONS not in user_data
 
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -813,9 +821,10 @@ class TestResumePickCallback:
         _mock_thread_id: MagicMock,
         mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = None
+        mock_tr.get_window_for_thread.return_value = None
         mock_tm.create_window = AsyncMock(
             return_value=(False, "Tmux error", None, None)
         )
@@ -932,6 +941,7 @@ class TestResumeCancelCallback:
 class TestResumePerWindowProvider:
     @patch(f"{_RC}.get_provider_for_window")
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -940,15 +950,16 @@ class TestResumePerWindowProvider:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
         mock_gpw: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = "@3"
+        mock_tr.get_window_for_thread.return_value = "@3"
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
         mock_gpw.return_value.make_launch_args.return_value = "--resume sess-1"
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
@@ -972,6 +983,7 @@ class TestResumePerWindowProvider:
 
     @patch(f"{_RC}.get_provider")
     @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.thread_router")
     @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     @patch(f"{_RC}.get_thread_id", return_value=42)
@@ -980,15 +992,16 @@ class TestResumePerWindowProvider:
         _mock_thread_id: MagicMock,
         _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
+        mock_tr: MagicMock,
         mock_tm: MagicMock,
         mock_gp: MagicMock,
     ) -> None:
-        mock_sm.get_window_for_thread.return_value = None
+        mock_tr.get_window_for_thread.return_value = None
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
         )
         mock_sm.wait_for_session_map_entry = AsyncMock()
-        mock_sm.resolve_chat_id.return_value = -100999
+        mock_tr.resolve_chat_id.return_value = -100999
         mock_gp.return_value.make_launch_args.return_value = "--resume sess-1"
 
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")

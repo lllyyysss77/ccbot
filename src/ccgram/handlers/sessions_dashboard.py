@@ -25,6 +25,7 @@ from telegram.ext import ContextTypes
 
 from ..config import config
 from ..session import session_manager
+from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_SESSIONS_KILL,
@@ -34,6 +35,8 @@ from .callback_data import (
     CB_STATUS_ESC,
     CB_STATUS_SCREENSHOT,
 )
+from .callback_helpers import user_owns_window
+from .callback_registry import register
 from .cleanup import clear_topic_state
 from .message_sender import safe_edit, safe_reply
 
@@ -47,7 +50,7 @@ _NEW_BTN = InlineKeyboardButton("\u2795 New Session", callback_data=CB_SESSIONS_
 
 async def _build_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Build dashboard text and keyboard for a user's sessions."""
-    bindings = session_manager.get_all_thread_windows(user_id)
+    bindings = thread_router.get_all_thread_windows(user_id)
 
     if not bindings:
         keyboard = InlineKeyboardMarkup([[_REFRESH_BTN, _NEW_BTN]])
@@ -64,7 +67,7 @@ async def _build_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     lines: list[str] = []
     action_rows: list[list[InlineKeyboardButton]] = []
     for _thread_id, window_id in sorted(bindings.items()):
-        display_name = session_manager.get_display_name(window_id)
+        display_name = thread_router.get_display_name(window_id)
         ws = session_manager.get_window_state(window_id)
         alive = window_id in live_ids
         is_external = ws.external
@@ -132,7 +135,7 @@ async def handle_sessions_kill(
     if ws.external:
         await safe_edit(query, "External sessions cannot be killed from ccgram.")
         return
-    display = session_manager.get_display_name(window_id)
+    display = thread_router.get_display_name(window_id)
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -155,16 +158,16 @@ async def handle_sessions_kill_confirm(
     query: CallbackQuery, user_id: int, window_id: str, bot: Bot
 ) -> None:
     """Second tap — kill the tmux window, unbind all users, refresh dashboard."""
-    display = session_manager.get_display_name(window_id)
+    display = thread_router.get_display_name(window_id)
 
     w = await tmux_manager.find_window_by_id(window_id)
     if w:
         await tmux_manager.kill_window(w.window_id)
 
     # Unbind ALL users bound to this window
-    for uid, tid, bound_wid in list(session_manager.iter_thread_bindings()):
+    for uid, tid, bound_wid in list(thread_router.iter_thread_bindings()):
         if bound_wid == window_id:
-            session_manager.unbind_thread(uid, tid)
+            thread_router.unbind_thread(uid, tid)
             await clear_topic_state(uid, tid, bot, window_id=window_id)
 
     logger.info(
@@ -179,3 +182,40 @@ async def handle_sessions_kill_confirm(
     await safe_edit(
         query, f"\U0001f5d1 Killed '{display}'\n\n{text}", reply_markup=keyboard
     )
+
+
+@register(
+    CB_SESSIONS_REFRESH,
+    CB_SESSIONS_NEW,
+    CB_SESSIONS_KILL_CONFIRM,
+    CB_SESSIONS_KILL,
+)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    user = update.effective_user
+    if not user:
+        return
+
+    data = query.data
+
+    if data == CB_SESSIONS_REFRESH:
+        await handle_sessions_refresh(query, user.id)
+        await query.answer("Refreshed")
+    elif data == CB_SESSIONS_NEW:
+        await query.answer("Create a new topic to start a session.")
+    elif data.startswith(CB_SESSIONS_KILL_CONFIRM):
+        window_id = data[len(CB_SESSIONS_KILL_CONFIRM) :]
+        if not user_owns_window(user.id, window_id):
+            await query.answer("Not your session", show_alert=True)
+            return
+        await handle_sessions_kill_confirm(query, user.id, window_id, context.bot)
+        await query.answer("Killed")
+    elif data.startswith(CB_SESSIONS_KILL):
+        window_id = data[len(CB_SESSIONS_KILL) :]
+        if not user_owns_window(user.id, window_id):
+            await query.answer("Not your session", show_alert=True)
+            return
+        await handle_sessions_kill(query, user.id, window_id)
+        await query.answer()

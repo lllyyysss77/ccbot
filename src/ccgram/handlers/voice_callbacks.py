@@ -14,7 +14,10 @@ from telegram.ext import ContextTypes
 
 from ..providers import get_provider_for_window
 from ..session import session_manager
+from ..thread_router import thread_router
+from .callback_data import CB_VOICE
 from .callback_helpers import get_thread_id
+from .callback_registry import register
 from .message_sender import ack_reaction
 from .user_state import VOICE_PENDING
 
@@ -72,7 +75,7 @@ async def _handle_send(
         return
 
     thread_id = get_thread_id(update)
-    window_id = session_manager.resolve_window_for_thread(user_id, thread_id)
+    window_id = thread_router.resolve_window_for_thread(user_id, thread_id)
     if not window_id:
         pending_store[(msg.chat.id, message_id)] = pending_text
         await query.answer("⚠️ No session bound.", show_alert=True)
@@ -130,3 +133,11 @@ async def _handle_drop(
         logger.warning("Failed to delete voice confirm message on discard: %s", e)
 
     await query.answer("Discarded")
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(CB_VOICE)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await handle_voice_callback(update, context)

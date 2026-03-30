@@ -23,6 +23,7 @@ from telegram.ext import ContextTypes
 from ..config import config
 from ..providers import get_provider, get_provider_for_window, resolve_launch_command
 from ..session import session_manager
+from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from ..utils import read_session_metadata_from_jsonl
 from .callback_data import (
@@ -34,6 +35,7 @@ from .callback_data import (
     CB_RECOVERY_RESUME,
 )
 from .callback_helpers import get_thread_id
+from .callback_registry import register
 from .message_sender import safe_edit, safe_send
 from .topic_emoji import format_topic_name_for_mode
 from .user_state import (
@@ -301,7 +303,7 @@ def _validate_recovery_state(
             return None
     else:
         # Proactive notification path: validate via session_manager binding
-        bound_wid = session_manager.get_window_for_thread(user_id, thread_id)
+        bound_wid = thread_router.get_window_for_thread(user_id, thread_id)
         if bound_wid != data_suffix:
             return None
         # Set up recovery state for downstream handlers
@@ -343,8 +345,8 @@ async def _create_and_bind_window(
     Returns True on success, False on failure.
     """
     # Unbind old dead window and clear dead-notification tracking
-    session_manager.unbind_thread(user_id, thread_id)
-    from .status_polling import clear_dead_notification
+    thread_router.unbind_thread(user_id, thread_id)
+    from .polling_strategies import clear_dead_notification
 
     clear_dead_notification(user_id, thread_id)
 
@@ -376,16 +378,16 @@ async def _create_and_bind_window(
     session_manager.set_window_provider(created_wid, provider.capabilities.name)
     session_manager.set_window_approval_mode(created_wid, approval_mode)
 
-    session_manager.bind_thread(
+    thread_router.bind_thread(
         user_id, thread_id, created_wid, window_name=created_wname
     )
     chat = query.message.chat if query.message else None
     if chat and chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user_id, thread_id, chat.id)
+        thread_router.set_group_chat_id(user_id, thread_id, chat.id)
 
     try:
         await context.bot.edit_forum_topic(
-            chat_id=session_manager.resolve_chat_id(user_id, thread_id),
+            chat_id=thread_router.resolve_chat_id(user_id, thread_id),
             message_thread_id=thread_id,
             name=format_topic_name_for_mode(created_wname, approval_mode),
         )
@@ -407,7 +409,7 @@ async def _create_and_bind_window(
             logger.warning("Failed to forward pending text: %s", send_msg)
             await safe_send(
                 context.bot,
-                session_manager.resolve_chat_id(user_id, thread_id),
+                thread_router.resolve_chat_id(user_id, thread_id),
                 f"\u274c Failed to send pending message: {send_msg}",
                 message_thread_id=thread_id,
             )
@@ -632,3 +634,21 @@ async def _handle_cancel(
     _clear_recovery_state(context.user_data)
     await safe_edit(query, "Cancelled. Send a message to try again.")
     await query.answer("Cancelled")
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(
+    CB_RECOVERY_BACK,
+    CB_RECOVERY_FRESH,
+    CB_RECOVERY_CONTINUE,
+    CB_RECOVERY_RESUME,
+    CB_RECOVERY_PICK,
+    CB_RECOVERY_CANCEL,
+)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    assert query is not None and query.data is not None and user is not None
+    await handle_recovery_callback(query, user.id, query.data, update, context)

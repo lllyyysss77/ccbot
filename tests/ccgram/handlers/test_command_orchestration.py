@@ -1,20 +1,21 @@
-"""Tests for forward_command_handler CC command resolution."""
-
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccgram.bot import (
+from ccgram.bot import forward_command_handler
+from ccgram.handlers.command_orchestration import (
     _command_known_in_other_provider,
     _extract_pane_delta,
     _extract_probe_error_line,
-    _get_provider_command_metadata,
+    _build_provider_command_metadata,
     _maybe_send_command_failure_message,
     _normalize_slash_token,
     _probe_transcript_command_error,
     _short_supported_commands,
-    forward_command_handler,
+    get_global_provider_menu,
+    set_global_provider_menu,
+    sync_scoped_provider_menu,
 )
 
 
@@ -52,13 +53,14 @@ def _allow_user():
 
 
 class TestForwardCommandResolution:
-    """Verify that sanitized Telegram command names are resolved to original CC names."""
-
     @pytest.fixture(autouse=True)
     def _setup_mocks(self):
+        self.mock_tr = MagicMock()
+        self.mock_tr.resolve_window_for_thread.return_value = "@1"
+        self.mock_tr.get_display_name.return_value = "project"
+        self.mock_tr.set_group_chat_id = MagicMock()
+
         self.mock_sm = MagicMock()
-        self.mock_sm.resolve_window_for_thread.return_value = "@1"
-        self.mock_sm.get_display_name.return_value = "project"
         self.mock_sm.send_to_window = AsyncMock(return_value=(True, ""))
         self.mock_sm.get_window_state.return_value = SimpleNamespace(
             transcript_path="",
@@ -72,19 +74,27 @@ class TestForwardCommandResolution:
         )
         self.mock_tm.capture_pane = AsyncMock(return_value="")
         self.mock_provider = SimpleNamespace(
-            capabilities=SimpleNamespace(name="claude", supports_incremental_read=True)
+            capabilities=SimpleNamespace(
+                name="claude",
+                supports_incremental_read=True,
+                supports_status_snapshot=False,
+            )
         )
         self.mock_probe_ctx = AsyncMock(return_value=(None, None, None))
         self.mock_probe_spawn = MagicMock()
 
         with (
-            patch("ccgram.bot.session_manager", self.mock_sm),
-            patch("ccgram.bot.tmux_manager", self.mock_tm),
+            patch("ccgram.handlers.command_orchestration.thread_router", self.mock_tr),
             patch(
-                "ccgram.bot.get_provider_for_window", return_value=self.mock_provider
+                "ccgram.handlers.command_orchestration.session_manager", self.mock_sm
+            ),
+            patch("ccgram.handlers.command_orchestration.tmux_manager", self.mock_tm),
+            patch(
+                "ccgram.handlers.command_orchestration.get_provider_for_window",
+                return_value=self.mock_provider,
             ),
             patch(
-                "ccgram.bot._get_provider_command_metadata",
+                "ccgram.handlers.command_orchestration._build_provider_command_metadata",
                 return_value=(
                     {
                         "clear": "clear",
@@ -104,16 +114,22 @@ class TestForwardCommandResolution:
                     },
                 ),
             ),
-            patch("ccgram.bot._command_known_in_other_provider", return_value=False),
             patch(
-                "ccgram.bot._capture_command_probe_context",
+                "ccgram.handlers.command_orchestration._command_known_in_other_provider",
+                return_value=False,
+            ),
+            patch(
+                "ccgram.handlers.command_orchestration._capture_command_probe_context",
                 self.mock_probe_ctx,
             ),
             patch(
-                "ccgram.bot._spawn_command_failure_probe",
+                "ccgram.handlers.command_orchestration._spawn_command_failure_probe",
                 self.mock_probe_spawn,
             ),
-            patch("ccgram.bot._sync_scoped_provider_menu", new_callable=AsyncMock),
+            patch(
+                "ccgram.handlers.command_orchestration.sync_scoped_provider_menu",
+                new_callable=AsyncMock,
+            ),
         ):
             yield
 
@@ -162,7 +178,10 @@ class TestForwardCommandResolution:
         self.mock_sm.send_to_window.assert_called_once_with("@1", "/unknown_thing")
 
     async def test_known_other_provider_command_is_rejected(self) -> None:
-        with patch("ccgram.bot._command_known_in_other_provider", return_value=True):
+        with patch(
+            "ccgram.handlers.command_orchestration._command_known_in_other_provider",
+            return_value=True,
+        ):
             update = _make_update(text="/cost")
             await forward_command_handler(update, _make_context())
 
@@ -188,7 +207,6 @@ class TestForwardCommandResolution:
         await forward_command_handler(update, _make_context())
 
         reply_text = update.message.reply_text.call_args[0][0]
-        # safe_reply converts to entities, check the text content
         assert "committing" in reply_text and "code" in reply_text
 
     async def test_clear_clears_session(self) -> None:
@@ -198,11 +216,13 @@ class TestForwardCommandResolution:
         self.mock_sm.clear_window_session.assert_called_once_with("@1")
 
     async def test_clear_enqueues_status_clear_and_resets_idle(self) -> None:
-        from ccgram.handlers.status_polling import (
-            _get_window_state,
-            _window_poll_state,
+        from ccgram.handlers.polling_coordinator import _get_window_state
+        from ccgram.handlers.polling_strategies import (
             reset_seen_status_state,
+            terminal_strategy,
         )
+
+        _window_poll_state = terminal_strategy._states
 
         _get_window_state("@1").has_seen_status = True
         try:
@@ -228,7 +248,7 @@ class TestForwardCommandResolution:
             reset_seen_status_state()
 
     async def test_no_session_bound(self) -> None:
-        self.mock_sm.resolve_window_for_thread.return_value = None
+        self.mock_tr.resolve_window_for_thread.return_value = None
 
         update = _make_update(text="/clear")
         await forward_command_handler(update, _make_context())
@@ -259,7 +279,9 @@ class TestForwardCommandResolution:
     async def test_unauthorized_user(self) -> None:
         with (
             patch("ccgram.bot.is_user_allowed", return_value=False),
-            patch("ccgram.bot._get_provider_command_metadata") as mock_metadata,
+            patch(
+                "ccgram.handlers.command_orchestration._build_provider_command_metadata"
+            ) as mock_metadata,
         ):
             update = _make_update(text="/clear")
             await forward_command_handler(update, _make_context())
@@ -275,71 +297,97 @@ class TestForwardCommandResolution:
 
         self.mock_sm.send_to_window.assert_not_called()
 
-    async def test_codex_status_sends_snapshot_reply(self) -> None:
+    async def test_status_snapshot_sends_reply(self) -> None:
         self.mock_sm.get_window_state.return_value = SimpleNamespace(
             transcript_path="/tmp/codex.jsonl",
             session_id="sess-1",
             cwd="/work/repo",
         )
-        codex_provider = SimpleNamespace(capabilities=SimpleNamespace(name="codex"))
+        codex_provider = SimpleNamespace(
+            capabilities=SimpleNamespace(
+                name="codex",
+                supports_incremental_read=True,
+                supports_status_snapshot=True,
+            ),
+            build_status_snapshot=MagicMock(return_value="Status snapshot body"),
+            has_output_since=MagicMock(return_value=False),
+        )
 
-        with (
-            patch("ccgram.bot.get_provider_for_window", return_value=codex_provider),
-            patch(
-                "ccgram.bot.build_codex_status_snapshot",
-                return_value="Codex status snapshot body",
-            ) as mock_snapshot,
+        with patch(
+            "ccgram.handlers.command_orchestration.get_provider_for_window",
+            return_value=codex_provider,
         ):
             update = _make_update(text="/status")
             await forward_command_handler(update, _make_context())
 
         self.mock_sm.send_to_window.assert_called_once_with("@1", "/status")
-        mock_snapshot.assert_called_once_with(
+        codex_provider.build_status_snapshot.assert_called_once_with(
             "/tmp/codex.jsonl",
             display_name="project",
             session_id="sess-1",
             cwd="/work/repo",
         )
         assert update.message.reply_text.call_count == 2
-        assert (
-            "status snapshot body"
-            in update.message.reply_text.call_args_list[1].args[0]
+        assert "snapshot body" in update.message.reply_text.call_args_list[1].args[0]
+
+    async def test_status_on_non_snapshot_provider_skips_snapshot(self) -> None:
+        claude_provider = SimpleNamespace(
+            capabilities=SimpleNamespace(
+                name="claude",
+                supports_incremental_read=True,
+                supports_status_snapshot=False,
+            ),
+            build_status_snapshot=MagicMock(return_value=None),
         )
 
-    async def test_status_on_non_codex_skips_snapshot(self) -> None:
-        claude_provider = SimpleNamespace(capabilities=SimpleNamespace(name="claude"))
-
-        with (
-            patch("ccgram.bot.get_provider_for_window", return_value=claude_provider),
-            patch("ccgram.bot.build_codex_status_snapshot") as mock_snapshot,
+        with patch(
+            "ccgram.handlers.command_orchestration.get_provider_for_window",
+            return_value=claude_provider,
         ):
             update = _make_update(text="/status")
             await forward_command_handler(update, _make_context())
 
         self.mock_sm.send_to_window.assert_called_once_with("@1", "/status")
-        mock_snapshot.assert_not_called()
+        claude_provider.build_status_snapshot.assert_not_called()
         assert update.message.reply_text.call_count == 1
 
-    async def test_codex_status_skips_fallback_when_native_reply_exists(self) -> None:
+    async def test_status_snapshot_skips_fallback_when_native_reply_exists(
+        self,
+    ) -> None:
         self.mock_sm.get_window_state.return_value = SimpleNamespace(
             transcript_path="/tmp/codex.jsonl",
             session_id="sess-1",
             cwd="/work/repo",
         )
-        codex_provider = SimpleNamespace(capabilities=SimpleNamespace(name="codex"))
+        codex_provider = SimpleNamespace(
+            capabilities=SimpleNamespace(
+                name="codex",
+                supports_incremental_read=True,
+                supports_status_snapshot=True,
+            ),
+            build_status_snapshot=MagicMock(return_value=None),
+            has_output_since=MagicMock(return_value=True),
+        )
 
         with (
-            patch("ccgram.bot.get_provider_for_window", return_value=codex_provider),
-            patch("ccgram.bot._codex_status_probe_offset", return_value=0),
-            patch("ccgram.bot.has_codex_assistant_output_since", return_value=True),
-            patch("ccgram.bot.build_codex_status_snapshot") as mock_snapshot,
-            patch("ccgram.bot.asyncio.sleep", new_callable=AsyncMock),
+            patch(
+                "ccgram.handlers.command_orchestration.get_provider_for_window",
+                return_value=codex_provider,
+            ),
+            patch(
+                "ccgram.handlers.command_orchestration._status_snapshot_probe_offset",
+                return_value=0,
+            ),
+            patch(
+                "ccgram.handlers.command_orchestration.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
         ):
             update = _make_update(text="/status")
             await forward_command_handler(update, _make_context())
 
         self.mock_sm.send_to_window.assert_called_once_with("@1", "/status")
-        mock_snapshot.assert_not_called()
+        codex_provider.build_status_snapshot.assert_not_called()
         assert update.message.reply_text.call_count == 1
 
 
@@ -398,13 +446,19 @@ class TestCommandFailureProbe:
         message = AsyncMock()
 
         with (
-            patch("ccgram.bot.asyncio.sleep", new_callable=AsyncMock),
             patch(
-                "ccgram.bot._probe_transcript_command_error",
+                "ccgram.handlers.command_orchestration.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccgram.handlers.command_orchestration._probe_transcript_command_error",
                 new_callable=AsyncMock,
                 return_value="unrecognized command '/foo'",
             ),
-            patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
+            patch(
+                "ccgram.handlers.command_orchestration.safe_reply",
+                new_callable=AsyncMock,
+            ) as mock_reply,
         ):
             await _maybe_send_command_failure_message(
                 message,
@@ -426,18 +480,24 @@ class TestCommandFailureProbe:
         message = AsyncMock()
 
         with (
-            patch("ccgram.bot.asyncio.sleep", new_callable=AsyncMock),
             patch(
-                "ccgram.bot._probe_transcript_command_error",
+                "ccgram.handlers.command_orchestration.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccgram.handlers.command_orchestration._probe_transcript_command_error",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "ccgram.bot.tmux_manager.capture_pane",
+                "ccgram.handlers.command_orchestration.tmux_manager.capture_pane",
                 new_callable=AsyncMock,
                 return_value="before\nunknown command: /foo",
             ),
-            patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
+            patch(
+                "ccgram.handlers.command_orchestration.safe_reply",
+                new_callable=AsyncMock,
+            ) as mock_reply,
         ):
             await _maybe_send_command_failure_message(
                 message,
@@ -458,18 +518,24 @@ class TestCommandFailureProbe:
         message = AsyncMock()
 
         with (
-            patch("ccgram.bot.asyncio.sleep", new_callable=AsyncMock),
             patch(
-                "ccgram.bot._probe_transcript_command_error",
+                "ccgram.handlers.command_orchestration.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccgram.handlers.command_orchestration._probe_transcript_command_error",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "ccgram.bot.tmux_manager.capture_pane",
+                "ccgram.handlers.command_orchestration.tmux_manager.capture_pane",
                 new_callable=AsyncMock,
                 return_value="before\nall good",
             ),
-            patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
+            patch(
+                "ccgram.handlers.command_orchestration.safe_reply",
+                new_callable=AsyncMock,
+            ) as mock_reply,
         ):
             await _maybe_send_command_failure_message(
                 message,
@@ -534,29 +600,75 @@ class TestCommandHelperFunctions:
 
         with (
             patch(
-                "ccgram.bot.registry.provider_names",
+                "ccgram.handlers.command_orchestration.registry.provider_names",
                 return_value=["codex", "claude", "gemini"],
             ),
             patch(
-                "ccgram.bot.registry.get",
+                "ccgram.handlers.command_orchestration.registry.get",
                 side_effect=lambda name: {"claude": claude, "gemini": gemini}[name],
             ),
             patch(
-                "ccgram.bot._get_provider_command_metadata",
+                "ccgram.handlers.command_orchestration._build_provider_command_metadata",
                 side_effect=lambda provider: ({}, _supported(provider)),
             ),
         ):
             assert _command_known_in_other_provider("/cost", current) is True  # type: ignore[arg-type]
             assert _command_known_in_other_provider("/not-here", current) is False  # type: ignore[arg-type]
 
-    def test_get_provider_command_metadata_builds_mapping_and_supported(self) -> None:
+    def test_build_provider_command_metadata_builds_mapping_and_supported(self) -> None:
         provider = SimpleNamespace(
             capabilities=SimpleNamespace(name="codex", builtin_commands=("/builtin",))
         )
         discovered = [SimpleNamespace(name="/status", telegram_name="status")]
 
-        with patch("ccgram.bot.discover_provider_commands", return_value=discovered):
-            mapping, supported = _get_provider_command_metadata(provider)  # type: ignore[arg-type]
+        with patch(
+            "ccgram.handlers.command_orchestration.discover_provider_commands",
+            return_value=discovered,
+        ):
+            mapping, supported = _build_provider_command_metadata(provider)  # type: ignore[arg-type]
 
         assert mapping == {"status": "/status"}
         assert supported == {"/status", "/builtin"}
+
+
+class TestMenuCacheInvalidation:
+    async def test_menu_cache_invalidated_on_provider_change(self) -> None:
+        from ccgram.handlers.command_orchestration import (
+            _scoped_provider_menu,
+            _chat_scoped_provider_menu,
+        )
+
+        _scoped_provider_menu.clear()
+        _chat_scoped_provider_menu.clear()
+        set_global_provider_menu("old")
+        try:
+            message = AsyncMock()
+            message.chat.id = -100
+            message.get_bot.return_value = object()
+            codex = SimpleNamespace(capabilities=SimpleNamespace(name="codex"))
+            claude = SimpleNamespace(capabilities=SimpleNamespace(name="claude"))
+
+            with patch(
+                "ccgram.handlers.command_orchestration.register_commands",
+                new_callable=AsyncMock,
+            ) as mock_reg:
+                await sync_scoped_provider_menu(message, 1, codex)  # type: ignore[arg-type]
+                await sync_scoped_provider_menu(message, 1, claude)  # type: ignore[arg-type]
+
+            assert mock_reg.call_count == 2
+            assert _scoped_provider_menu[(-100, 1)] == "claude"
+        finally:
+            _scoped_provider_menu.clear()
+            _chat_scoped_provider_menu.clear()
+            set_global_provider_menu("claude")
+
+
+class TestGlobalProviderMenu:
+    def test_get_set_global_provider_menu(self) -> None:
+        old = get_global_provider_menu()
+        try:
+            set_global_provider_menu("test-provider")
+            assert get_global_provider_menu() == "test-provider"
+        finally:
+            if old is not None:
+                set_global_provider_menu(old)

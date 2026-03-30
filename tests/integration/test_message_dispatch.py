@@ -62,7 +62,6 @@ async def app():
     application = Application.builder().token(token).build()
 
     from ccgram.bot import (
-        callback_handler,
         forward_command_handler,
         history_command,
         new_command,
@@ -70,6 +69,12 @@ async def app():
         text_handler,
         topic_closed_handler,
     )
+    from ccgram.handlers.callback_registry import (
+        dispatch as callback_handler,
+        load_handlers,
+    )
+
+    load_handlers()
     from telegram.ext import (
         CallbackQueryHandler,
         CommandHandler,
@@ -141,9 +146,7 @@ async def test_history_command_dispatched(app) -> None:
 
     with (
         patch("ccgram.bot.is_user_allowed", return_value=True),
-        patch(
-            "ccgram.bot.session_manager.resolve_window_for_thread", return_value=None
-        ),
+        patch("ccgram.bot.thread_router.resolve_window_for_thread", return_value=None),
         patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
     ):
         await app.process_update(update)
@@ -155,9 +158,7 @@ async def test_unknown_command_forwarded(app) -> None:
 
     with (
         patch("ccgram.bot.is_user_allowed", return_value=True),
-        patch(
-            "ccgram.bot.session_manager.resolve_window_for_thread", return_value="@0"
-        ),
+        patch("ccgram.bot.thread_router.resolve_window_for_thread", return_value="@0"),
         patch(
             "ccgram.bot.tmux_manager.find_window_by_id",
             new_callable=AsyncMock,
@@ -168,7 +169,7 @@ async def test_unknown_command_forwarded(app) -> None:
             new_callable=AsyncMock,
             return_value=(True, "Sent"),
         ),
-        patch("ccgram.bot.session_manager.get_display_name", return_value="test-win"),
+        patch("ccgram.bot.thread_router.get_display_name", return_value="test-win"),
         patch("ccgram.bot.safe_reply", new_callable=AsyncMock),
         patch.object(Chat, "send_action", new_callable=AsyncMock),
     ):
@@ -182,9 +183,7 @@ async def test_command_priority_over_text(app) -> None:
     with (
         patch("ccgram.bot.is_user_allowed", return_value=True),
         patch("ccgram.bot.handle_text_message", new_callable=AsyncMock) as mock_text,
-        patch(
-            "ccgram.bot.session_manager.resolve_window_for_thread", return_value=None
-        ),
+        patch("ccgram.bot.thread_router.resolve_window_for_thread", return_value=None),
         patch("ccgram.bot.safe_reply", new_callable=AsyncMock),
     ):
         await app.process_update(update)

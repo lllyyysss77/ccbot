@@ -23,11 +23,15 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    Update,
 )
 from telegram.error import TelegramError
+from telegram.ext import ContextTypes
+
 from ..llm import get_completer
 from ..llm import CommandResult
 from ..session import session_manager
+from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_SHELL_CANCEL,
@@ -35,9 +39,11 @@ from .callback_data import (
     CB_SHELL_EDIT,
     CB_SHELL_RUN,
 )
+from .callback_helpers import get_thread_id
+from .callback_registry import register
 from .message_sender import safe_edit, safe_reply, safe_send
 from .message_queue import enqueue_status_update
-from .status_polling import clear_probe_failures
+from .polling_strategies import clear_probe_failures
 
 logger = structlog.get_logger()
 
@@ -151,7 +157,7 @@ async def _cancel_stuck_input(window_id: str) -> None:
 
     last = lines[-1]
     m = match_prompt(last)
-    if m and not m.group(2).strip():
+    if m and not m.trailing_text.strip():
         return  # clean bare prompt — all good
 
     # Shell is idle but NOT at a clean prompt → continuation or partial input.
@@ -172,7 +178,7 @@ async def handle_shell_message(
     await enqueue_status_update(bot, user_id, window_id, None, thread_id)
     clear_probe_failures(window_id)
 
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
     clear_shell_pending(chat_id, thread_id)
     await _ensure_prompt_marker(window_id)
 
@@ -257,7 +263,7 @@ async def _execute_raw_command(
         window_id, command, raw=True
     )
     if not success:
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        chat_id = thread_router.resolve_chat_id(user_id, thread_id)
         await safe_send(
             bot, chat_id, f"\u274c {err_message}", message_thread_id=thread_id
         )
@@ -362,7 +368,7 @@ async def handle_shell_callback(
         await query.answer("No topic context")
         return
 
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
     pending = _shell_pending.get((chat_id, thread_id))
 
     if data.startswith(CB_SHELL_RUN) or data.startswith(CB_SHELL_CONFIRM_DANGER):
@@ -393,7 +399,7 @@ async def _cb_run(
         return
 
     # Use window from thread binding (authoritative), not callback data
-    window_id = session_manager.get_window_for_thread(user_id, thread_id)
+    window_id = thread_router.get_window_for_thread(user_id, thread_id)
     if not window_id:
         clear_shell_pending(chat_id, thread_id)
         await safe_edit(query, "\u274c No session bound")
@@ -440,3 +446,15 @@ async def _cb_cancel(
     await query.answer("Cancelled")
     clear_shell_pending(chat_id, thread_id)
     await safe_edit(query, "Cancelled")
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(CB_SHELL_RUN, CB_SHELL_EDIT, CB_SHELL_CANCEL, CB_SHELL_CONFIRM_DANGER)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    assert query is not None and query.data is not None and user is not None
+    thread_id = get_thread_id(update)
+    await handle_shell_callback(query, user.id, query.data, context.bot, thread_id)

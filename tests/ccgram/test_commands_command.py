@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram import BotCommandScopeChat, BotCommandScopeChatMember
 
-import ccgram.bot as bot_mod
-from ccgram.bot import (
-    _chat_scoped_provider_menu,
+import ccgram.handlers.command_orchestration as cmd_orch_mod
+from ccgram.bot import commands_command
+from ccgram.handlers.command_orchestration import (
     _scoped_provider_menu,
-    _sync_scoped_provider_menu,
-    commands_command,
+    _chat_scoped_provider_menu,
+    sync_scoped_provider_menu as _sync_scoped_provider_menu,
 )
 from ccgram.cc_commands import CCCommand
 
@@ -47,37 +47,37 @@ def _allow_user():
 def _clean_scoped_caches():
     _scoped_provider_menu.clear()
     _chat_scoped_provider_menu.clear()
-    bot_mod._global_provider_menu = None
+    cmd_orch_mod._global_provider_menu = None
     yield
     _scoped_provider_menu.clear()
     _chat_scoped_provider_menu.clear()
-    bot_mod._global_provider_menu = None
+    cmd_orch_mod._global_provider_menu = None
 
 
 class TestCommandsCommand:
     async def test_unauthorized_user_returns_early(self) -> None:
         with (
             patch("ccgram.bot.is_user_allowed", return_value=False),
-            patch("ccgram.bot.session_manager") as mock_sm,
+            patch("ccgram.bot.thread_router") as mock_tr,
         ):
             await commands_command(_make_update(), MagicMock())
 
-        mock_sm.resolve_window_for_thread.assert_not_called()
+        mock_tr.resolve_window_for_thread.assert_not_called()
 
     async def test_no_message_returns_early(self) -> None:
         update = _make_update()
         update.message = None
-        with patch("ccgram.bot.session_manager") as mock_sm:
+        with patch("ccgram.bot.thread_router") as mock_tr:
             await commands_command(update, MagicMock())
-        mock_sm.resolve_window_for_thread.assert_not_called()
+        mock_tr.resolve_window_for_thread.assert_not_called()
 
     async def test_unbound_topic_reports_error(self) -> None:
         update = _make_update()
         with (
-            patch("ccgram.bot.session_manager") as mock_sm,
+            patch("ccgram.bot.thread_router") as mock_tr,
             patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
         ):
-            mock_sm.resolve_window_for_thread.return_value = None
+            mock_tr.resolve_window_for_thread.return_value = None
             await commands_command(update, MagicMock())
 
         mock_reply.assert_called_once()
@@ -89,13 +89,13 @@ class TestCommandsCommand:
             "AgentProvider", SimpleNamespace(capabilities=SimpleNamespace(name="codex"))
         )
         with (
-            patch("ccgram.bot.session_manager") as mock_sm,
+            patch("ccgram.bot.thread_router") as mock_tr,
             patch("ccgram.bot.get_provider_for_window", return_value=provider),
             patch("ccgram.bot._sync_scoped_provider_menu", new_callable=AsyncMock),
             patch("ccgram.bot.discover_provider_commands", return_value=[]),
             patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@1"
+            mock_tr.resolve_window_for_thread.return_value = "@1"
             await commands_command(update, MagicMock())
 
         mock_reply.assert_called_once()
@@ -129,7 +129,7 @@ class TestCommandsCommand:
             ),
         ]
         with (
-            patch("ccgram.bot.session_manager") as mock_sm,
+            patch("ccgram.bot.thread_router") as mock_tr,
             patch("ccgram.bot.get_provider_for_window", return_value=provider),
             patch(
                 "ccgram.bot._sync_scoped_provider_menu", new_callable=AsyncMock
@@ -137,7 +137,7 @@ class TestCommandsCommand:
             patch("ccgram.bot.discover_provider_commands", return_value=discovered),
             patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
         ):
-            mock_sm.resolve_window_for_thread.return_value = "@1"
+            mock_tr.resolve_window_for_thread.return_value = "@1"
             await commands_command(update, MagicMock())
 
         mock_sync.assert_called_once_with(update.message, 100, provider)
@@ -153,7 +153,7 @@ class TestScopedProviderMenuSync:
     async def test_caches_provider_menu_per_chat_user(self) -> None:
         _scoped_provider_menu.clear()
         _chat_scoped_provider_menu.clear()
-        bot_mod._global_provider_menu = None
+        cmd_orch_mod._global_provider_menu = None
         try:
             message = AsyncMock()
             message.chat.id = -100999
@@ -164,7 +164,8 @@ class TestScopedProviderMenuSync:
             )
 
             with patch(
-                "ccgram.bot.register_commands", new_callable=AsyncMock
+                "ccgram.handlers.command_orchestration.register_commands",
+                new_callable=AsyncMock,
             ) as mock_reg:
                 await _sync_scoped_provider_menu(message, 100, provider)
                 await _sync_scoped_provider_menu(message, 100, provider)
@@ -174,12 +175,12 @@ class TestScopedProviderMenuSync:
         finally:
             _scoped_provider_menu.clear()
             _chat_scoped_provider_menu.clear()
-            bot_mod._global_provider_menu = None
+            cmd_orch_mod._global_provider_menu = None
 
     async def test_cache_updates_when_provider_changes(self) -> None:
         _scoped_provider_menu.clear()
         _chat_scoped_provider_menu.clear()
-        bot_mod._global_provider_menu = None
+        cmd_orch_mod._global_provider_menu = None
         try:
             message = AsyncMock()
             message.chat.id = -100999
@@ -194,7 +195,8 @@ class TestScopedProviderMenuSync:
             )
 
             with patch(
-                "ccgram.bot.register_commands", new_callable=AsyncMock
+                "ccgram.handlers.command_orchestration.register_commands",
+                new_callable=AsyncMock,
             ) as mock_reg:
                 await _sync_scoped_provider_menu(message, 100, codex)
                 await _sync_scoped_provider_menu(message, 100, claude)
@@ -204,12 +206,12 @@ class TestScopedProviderMenuSync:
         finally:
             _scoped_provider_menu.clear()
             _chat_scoped_provider_menu.clear()
-            bot_mod._global_provider_menu = None
+            cmd_orch_mod._global_provider_menu = None
 
     async def test_register_failure_does_not_update_cache(self) -> None:
         _scoped_provider_menu.clear()
         _chat_scoped_provider_menu.clear()
-        bot_mod._global_provider_menu = None
+        cmd_orch_mod._global_provider_menu = None
         try:
             message = AsyncMock()
             message.chat.id = -100999
@@ -220,7 +222,7 @@ class TestScopedProviderMenuSync:
             )
 
             with patch(
-                "ccgram.bot.register_commands",
+                "ccgram.handlers.command_orchestration.register_commands",
                 new_callable=AsyncMock,
                 side_effect=OSError("boom"),
             ):
@@ -230,12 +232,12 @@ class TestScopedProviderMenuSync:
         finally:
             _scoped_provider_menu.clear()
             _chat_scoped_provider_menu.clear()
-            bot_mod._global_provider_menu = None
+            cmd_orch_mod._global_provider_menu = None
 
     async def test_falls_back_to_chat_scope_when_member_scope_fails(self) -> None:
         _scoped_provider_menu.clear()
         _chat_scoped_provider_menu.clear()
-        bot_mod._global_provider_menu = None
+        cmd_orch_mod._global_provider_menu = None
         try:
             message = AsyncMock()
             message.chat.id = -100999
@@ -246,7 +248,7 @@ class TestScopedProviderMenuSync:
             )
 
             with patch(
-                "ccgram.bot.register_commands",
+                "ccgram.handlers.command_orchestration.register_commands",
                 new_callable=AsyncMock,
                 side_effect=[OSError("member"), None],
             ) as mock_reg:
@@ -262,12 +264,12 @@ class TestScopedProviderMenuSync:
         finally:
             _scoped_provider_menu.clear()
             _chat_scoped_provider_menu.clear()
-            bot_mod._global_provider_menu = None
+            cmd_orch_mod._global_provider_menu = None
 
     async def test_falls_back_to_global_when_member_and_chat_scope_fail(self) -> None:
         _scoped_provider_menu.clear()
         _chat_scoped_provider_menu.clear()
-        bot_mod._global_provider_menu = None
+        cmd_orch_mod._global_provider_menu = None
         try:
             message = AsyncMock()
             message.chat.id = -100999
@@ -278,7 +280,7 @@ class TestScopedProviderMenuSync:
             )
 
             with patch(
-                "ccgram.bot.register_commands",
+                "ccgram.handlers.command_orchestration.register_commands",
                 new_callable=AsyncMock,
                 side_effect=[OSError("member"), OSError("chat"), None],
             ) as mock_reg:
@@ -292,12 +294,12 @@ class TestScopedProviderMenuSync:
         finally:
             _scoped_provider_menu.clear()
             _chat_scoped_provider_menu.clear()
-            bot_mod._global_provider_menu = None
+            cmd_orch_mod._global_provider_menu = None
 
     async def test_scoped_menu_cache_is_bounded(self) -> None:
         _scoped_provider_menu.clear()
         _chat_scoped_provider_menu.clear()
-        bot_mod._global_provider_menu = None
+        cmd_orch_mod._global_provider_menu = None
         try:
             message = AsyncMock()
             message.chat.id = -100999
@@ -308,8 +310,14 @@ class TestScopedProviderMenuSync:
             )
 
             with (
-                patch("ccgram.bot._MAX_SCOPED_PROVIDER_MENU_ENTRIES", 1),
-                patch("ccgram.bot.register_commands", new_callable=AsyncMock),
+                patch(
+                    "ccgram.handlers.command_orchestration._MAX_SCOPED_PROVIDER_MENU_ENTRIES",
+                    1,
+                ),
+                patch(
+                    "ccgram.handlers.command_orchestration.register_commands",
+                    new_callable=AsyncMock,
+                ),
             ):
                 await _sync_scoped_provider_menu(message, 100, provider)
                 await _sync_scoped_provider_menu(message, 101, provider)
@@ -318,4 +326,4 @@ class TestScopedProviderMenuSync:
         finally:
             _scoped_provider_menu.clear()
             _chat_scoped_provider_menu.clear()
-            bot_mod._global_provider_menu = None
+            cmd_orch_mod._global_provider_menu = None

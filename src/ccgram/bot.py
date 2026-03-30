@@ -18,28 +18,22 @@ Key functions: create_bot(), handle_new_message().
 """
 
 import asyncio
-from collections import OrderedDict
 import contextlib
 import structlog
 import os
 import re
 import signal
-import time
 from pathlib import Path
 
 from telegram import (
     Bot,
-    BotCommandScopeChat,
-    BotCommandScopeChatMember,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
     InputTextMessageContent,
-    Message,
     Update,
 )
-from telegram.constants import ChatAction
-from telegram.error import BadRequest, Conflict, NetworkError, RetryAfter, TelegramError
+from telegram.error import BadRequest, Conflict, NetworkError, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -55,95 +49,34 @@ from .cc_commands import (
     register_commands,
 )
 from .providers import (
-    AgentProvider,
-    detect_provider_from_pane,
-    detect_provider_from_runtime,
     get_provider,
     get_provider_for_window,
-    registry,
-    should_probe_pane_title_for_provider_detection,
 )
 from .config import config
-from .codex_status import (
-    build_codex_status_snapshot,
-    has_codex_assistant_output_since,
+from .handlers.topic_orchestration import (
+    adopt_unbound_windows as _adopt_unbound_windows,
+    handle_new_window as _handle_new_window,
+)
+from .handlers.command_orchestration import (
+    forward_command_handler,
+    sync_scoped_menu_for_text_context as _sync_scoped_menu_for_text_context,
+    sync_scoped_provider_menu as _sync_scoped_provider_menu,
+    setup_menu_refresh_job,
 )
 from .handlers.callback_data import (
-    CB_DIR_CANCEL,
-    CB_DIR_CONFIRM,
-    CB_DIR_FAV,
-    CB_DIR_HOME,
-    CB_DIR_PAGE,
-    CB_DIR_SELECT,
-    CB_DIR_STAR,
-    CB_DIR_UP,
-    CB_MODE_SELECT,
-    CB_PROV_SELECT,
-    CB_HISTORY_NEXT,
-    CB_HISTORY_PREV,
-    CB_KEYS_PREFIX,
     CB_PANE_SCREENSHOT,
-    CB_RECOVERY_BACK,
-    CB_RECOVERY_CANCEL,
-    CB_RECOVERY_CONTINUE,
-    CB_RECOVERY_FRESH,
-    CB_RECOVERY_PICK,
-    CB_RECOVERY_RESUME,
-    CB_RESUME_CANCEL,
-    CB_RESUME_PAGE,
-    CB_RESUME_PICK,
-    CB_SCREENSHOT_REFRESH,
-    CB_SESSIONS_KILL,
-    CB_SESSIONS_KILL_CONFIRM,
-    CB_SESSIONS_NEW,
-    CB_SESSIONS_REFRESH,
-    CB_STATUS_ESC,
-    CB_STATUS_NOTIFY,
-    CB_STATUS_RECALL,
-    CB_STATUS_REMOTE,
-    CB_STATUS_SCREENSHOT,
-    CB_SYNC_DISMISS,
-    CB_SYNC_FIX,
-    CB_TOOLBAR_CTRLC,
-    CB_TOOLBAR_DISMISS,
-    CB_VOICE,
-    CB_SHELL_CANCEL,
-    CB_SHELL_CONFIRM_DANGER,
-    CB_SHELL_EDIT,
-    CB_SHELL_RUN,
-    CB_WIN_BIND,
-    CB_WIN_CANCEL,
-    CB_WIN_NEW,
 )
 from .handlers.callback_helpers import get_thread_id as _get_thread_id
-from .handlers.callback_helpers import user_owns_window as _user_owns_window
-from .handlers.directory_callbacks import handle_directory_callback
-from .handlers.history_callbacks import handle_history_callback
-from .handlers.interactive_callbacks import (
-    handle_interactive_callback,
-    match_interactive_prefix as _match_interactive_prefix,
-)
-from .handlers.recovery_callbacks import handle_recovery_callback
+from .handlers.callback_registry import dispatch as _dispatch_callback
+from .handlers.callback_registry import load_handlers as _load_callback_handlers
 from .handlers.restore_command import restore_command
-from .handlers.resume_command import handle_resume_command_callback, resume_command
-from .handlers.screenshot_callbacks import handle_screenshot_callback
-from .handlers.voice_callbacks import handle_voice_callback
-from .handlers.window_callbacks import handle_window_callback
+from .handlers.resume_command import resume_command
 from .handlers.directory_browser import clear_browse_state
 from .handlers.cleanup import clear_topic_state
 from .handlers.topic_emoji import strip_emoji_prefix, update_stored_topic_name
 from .handlers.history import send_history
-from .handlers.sessions_dashboard import (
-    handle_sessions_kill,
-    handle_sessions_kill_confirm,
-    handle_sessions_refresh,
-    sessions_command,
-)
-from .handlers.sync_command import (
-    handle_sync_dismiss,
-    handle_sync_fix,
-    sync_command,
-)
+from .handlers.sessions_dashboard import sessions_command
+from .handlers.sync_command import sync_command
 from .handlers.upgrade import upgrade_command
 from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
@@ -161,19 +94,18 @@ from .handlers.message_queue import (
 )
 from .handlers.message_sender import safe_reply
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import status_poll_loop
+from .handlers.polling_coordinator import status_poll_loop
 from .handlers.file_handler import handle_document_message, handle_photo_message
 from .handlers.voice_handler import handle_voice_message
 from .handlers.text_handler import handle_text_message
 from .session import session_manager
 from .session_monitor import NewMessage, NewWindowEvent, SessionMonitor
+from .thread_router import thread_router
 from .telegram_request import ResilientPollingHTTPXRequest
 from .tmux_manager import tmux_manager
 from .utils import handle_general_topic_message, is_general_topic, task_done_callback
 
 logger = structlog.get_logger()
-
-_CommandRefreshError = (TelegramError, OSError)
 
 # Error keyword pattern for errors_only notification mode (word boundaries)
 _ERROR_KEYWORDS_RE = re.compile(
@@ -182,245 +114,15 @@ _ERROR_KEYWORDS_RE = re.compile(
 
 # Max label length for /recall command buttons (wider than status bar buttons)
 _RECALL_LABEL_MAX = 40
-_CODEX_STATUS_FALLBACK_DELAY_SECONDS = 1.2
-_COMMAND_ERROR_PROBE_DELAY_SECONDS = 1.0
-_COMMAND_ERROR_RE = re.compile(
-    r"(?i)\b(?:"
-    r"unrecognized command|"
-    r"unknown command|"
-    r"invalid command|"
-    r"unsupported command|"
-    r"no such command|"
-    r"command not found|"
-    r"not recognized"
-    r")\b"
-)
-
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
 
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 
-# Per-chat backoff for auto topic creation after Telegram flood control.
-# chat_id -> monotonic timestamp when next attempt is allowed.
-_topic_create_retry_until: dict[int, float] = {}
-_TOPIC_CREATE_RETRY_BUFFER_SECONDS = 1
-_scoped_provider_menu: OrderedDict[tuple[int, int], str] = OrderedDict()
-_chat_scoped_provider_menu: OrderedDict[int, str] = OrderedDict()
-_global_provider_menu: str | None = None
-_MAX_SCOPED_PROVIDER_MENU_ENTRIES = 512
-_MAX_CHAT_PROVIDER_MENU_ENTRIES = 256
-
 
 def is_user_allowed(user_id: int | None) -> bool:
     return user_id is not None and config.is_user_allowed(user_id)
-
-
-def _normalize_slash_token(command: str) -> str:
-    parts = command.strip().split(None, 1)
-    if not parts:
-        return "/"
-    token = parts[0].lower()
-    return token if token.startswith("/") else f"/{token}"
-
-
-def _extract_probe_error_line(text: str) -> str | None:
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if _COMMAND_ERROR_RE.search(line):
-            return line
-        if "error" in line.lower() and "command" in line.lower():
-            return line
-    return None
-
-
-def _extract_pane_delta(before: str | None, after: str | None) -> str:
-    """Return the likely newly-added pane text after a command send."""
-    if not after:
-        return ""
-    if not before:
-        return after
-    if before == after:
-        return ""
-
-    before_lines = before.splitlines()
-    after_lines = after.splitlines()
-    max_overlap = min(len(before_lines), len(after_lines))
-    overlap = 0
-    for size in range(max_overlap, 0, -1):
-        if before_lines[-size:] == after_lines[:size]:
-            overlap = size
-            break
-    return "\n".join(after_lines[overlap:]).strip()
-
-
-def _short_supported_commands(supported_commands: set[str], limit: int = 8) -> str:
-    supported = sorted(supported_commands)
-    if not supported:
-        return "Use /commands to list available commands."
-    shown = supported[:limit]
-    suffix = "" if len(supported) <= limit else " …"
-    return "Try: " + ", ".join(shown) + suffix
-
-
-def _set_bounded_cache_entry[K, V](
-    cache: OrderedDict[K, V],
-    key: K,
-    value: V,
-    *,
-    max_entries: int,
-) -> None:
-    if key in cache:
-        cache.pop(key, None)
-    cache[key] = value
-    while len(cache) > max_entries:
-        cache.popitem(last=False)
-
-
-def _get_lru_cache_entry[K, V](
-    cache: OrderedDict[K, V],
-    key: K,
-) -> V | None:
-    value = cache.get(key)
-    if value is None:
-        return None
-    cache.move_to_end(key)
-    return value
-
-
-def _build_provider_command_metadata(
-    provider: AgentProvider,
-) -> tuple[dict[str, str], set[str]]:
-    mapping: dict[str, str] = {}
-    supported: set[str] = set()
-    for cmd in discover_provider_commands(provider):
-        if cmd.telegram_name and cmd.telegram_name not in mapping:
-            mapping[cmd.telegram_name] = cmd.name
-        token = cmd.name if cmd.name.startswith("/") else f"/{cmd.name}"
-        supported.add(token.lower())
-    for builtin in provider.capabilities.builtin_commands:
-        if not builtin:
-            continue
-        token = builtin if builtin.startswith("/") else f"/{builtin}"
-        supported.add(token.lower())
-    return mapping, supported
-
-
-def _get_provider_command_metadata(
-    provider: AgentProvider,
-) -> tuple[dict[str, str], set[str]]:
-    return _build_provider_command_metadata(provider)
-
-
-async def _sync_scoped_provider_menu(
-    message: Message,
-    user_id: int,
-    provider: AgentProvider,
-) -> None:
-    """Update per-user command menu for the current chat/provider context."""
-    chat_id = message.chat.id
-    provider_name = provider.capabilities.name
-    cache_key = (chat_id, user_id)
-    if _get_lru_cache_entry(_scoped_provider_menu, cache_key) == provider_name:
-        return
-
-    try:
-        member_scope = BotCommandScopeChatMember(chat_id=chat_id, user_id=user_id)
-        await register_commands(
-            message.get_bot(), provider=provider, scope=member_scope
-        )
-        _set_bounded_cache_entry(
-            _scoped_provider_menu,
-            cache_key,
-            provider_name,
-            max_entries=_MAX_SCOPED_PROVIDER_MENU_ENTRIES,
-        )
-        _set_bounded_cache_entry(
-            _chat_scoped_provider_menu,
-            chat_id,
-            provider_name,
-            max_entries=_MAX_CHAT_PROVIDER_MENU_ENTRIES,
-        )
-        return
-    except _CommandRefreshError:
-        logger.debug(
-            "Failed to update member-scoped command menu (chat=%s user=%s provider=%s)",
-            chat_id,
-            user_id,
-            provider_name,
-        )
-
-    # Fallback for Telegram deployments where chat-member scopes are restricted.
-    # Chat scope still keeps command hints contextual for this chat.
-    if _get_lru_cache_entry(_chat_scoped_provider_menu, chat_id) != provider_name:
-        try:
-            chat_scope = BotCommandScopeChat(chat_id=chat_id)
-            await register_commands(
-                message.get_bot(), provider=provider, scope=chat_scope
-            )
-            _set_bounded_cache_entry(
-                _chat_scoped_provider_menu,
-                chat_id,
-                provider_name,
-                max_entries=_MAX_CHAT_PROVIDER_MENU_ENTRIES,
-            )
-            _set_bounded_cache_entry(
-                _scoped_provider_menu,
-                cache_key,
-                provider_name,
-                max_entries=_MAX_SCOPED_PROVIDER_MENU_ENTRIES,
-            )
-            return
-        except _CommandRefreshError:
-            logger.debug(
-                "Failed to update chat-scoped command menu (chat=%s provider=%s)",
-                chat_id,
-                provider_name,
-            )
-
-    # Last fallback: update global menu so slash suggestions still include
-    # provider commands (same UX as classic single-provider mode).
-    global _global_provider_menu
-    if _global_provider_menu == provider_name:
-        _set_bounded_cache_entry(
-            _scoped_provider_menu,
-            cache_key,
-            provider_name,
-            max_entries=_MAX_SCOPED_PROVIDER_MENU_ENTRIES,
-        )
-        return
-    try:
-        await register_commands(message.get_bot(), provider=provider)
-        _global_provider_menu = provider_name
-        _set_bounded_cache_entry(
-            _scoped_provider_menu,
-            cache_key,
-            provider_name,
-            max_entries=_MAX_SCOPED_PROVIDER_MENU_ENTRIES,
-        )
-    except _CommandRefreshError:
-        logger.debug(
-            "Failed to update global provider command menu (provider=%s)",
-            provider_name,
-        )
-
-
-async def _sync_scoped_menu_for_text_context(update: Update, user_id: int) -> None:
-    """Sync scoped menu when a bound topic receives plain text."""
-    message = update.message
-    if not message:
-        return
-    thread_id = _get_thread_id(update)
-    if thread_id is None:
-        return
-    window_id = session_manager.resolve_window_for_thread(user_id, thread_id)
-    if not window_id:
-        return
-    provider = get_provider_for_window(window_id)
-    await _sync_scoped_provider_menu(message, user_id, provider)
 
 
 # Group filter: when CCBOT_GROUP_ID is set, only process updates from that group.
@@ -459,7 +161,7 @@ async def history_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
         return
 
     thread_id = _get_thread_id(update)
-    window_id = session_manager.resolve_window_for_thread(user.id, thread_id)
+    window_id = thread_router.resolve_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(update.message, "\u274c No session bound to this topic.")
         return
@@ -481,7 +183,7 @@ async def commands_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
         return
 
     thread_id = _get_thread_id(update)
-    window_id = session_manager.resolve_window_for_thread(user.id, thread_id)
+    window_id = thread_router.resolve_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(update.message, "\u274c No session bound to this topic.")
         return
@@ -522,10 +224,10 @@ async def topic_closed_handler(
     if thread_id is None:
         return
 
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if window_id:
-        display = session_manager.get_display_name(window_id)
-        session_manager.unbind_thread(user.id, thread_id)
+        display = thread_router.get_display_name(window_id)
+        thread_router.unbind_thread(user.id, thread_id)
         # Clean up all memory state for this topic
         await clear_topic_state(
             user.id, thread_id, context.bot, context.user_data, window_id=window_id
@@ -568,7 +270,7 @@ async def topic_edited_handler(
     if chat_id is None:
         return
 
-    window_id = session_manager.get_window_for_chat_thread(chat_id, thread_id)
+    window_id = thread_router.get_window_for_chat_thread(chat_id, thread_id)
     if not window_id:
         logger.debug("Topic edited: no binding (thread=%d)", thread_id)
         return
@@ -577,7 +279,7 @@ async def topic_edited_handler(
 
     # Loop guard: if clean name matches current display name, this was a
     # bot-originated emoji/mode change — skip to prevent rename loops.
-    current_display = session_manager.get_display_name(window_id)
+    current_display = thread_router.get_display_name(window_id)
     if current_display and strip_emoji_prefix(current_display) == clean_name:
         logger.debug(
             "Topic edited: name unchanged after strip, skipping (thread=%d)", thread_id
@@ -618,368 +320,25 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await safe_reply(update.message, "\u274c Use this command inside a topic.")
         return
 
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(
             update.message, "\u274c This topic is not bound to any session."
         )
         return
 
-    display = session_manager.get_display_name(window_id)
+    display = thread_router.get_display_name(window_id)
     # Enqueue a status clear to actually delete the Telegram status message
     # (clear_topic_state only clears the tracking dict, leaving a ghost)
     await enqueue_status_update(context.bot, user.id, window_id, None, thread_id)
     await clear_topic_state(
         user.id, thread_id, context.bot, context.user_data, window_id=window_id
     )
-    session_manager.unbind_thread(user.id, thread_id)
+    thread_router.unbind_thread(user.id, thread_id)
     await safe_reply(
         update.message,
         f"\u2702 Unbound from window `{display}`. The session is still running.\n"
         "Send a message in this topic to rebind or create a new session.",
-    )
-
-
-async def forward_command_handler(
-    update: Update, _context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Forward any non-bot command as a slash command to the topic provider session."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        return
-    if not update.message:
-        return
-
-    # Store group chat_id for forum topic message routing
-    chat = update.message.chat
-    thread_id = _get_thread_id(update)
-    if chat.type in ("group", "supergroup") and thread_id is not None:
-        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
-
-    cmd_text = update.message.text or ""
-    # Split into command word + arguments, then strip @botname from command
-    parts = cmd_text.split(None, 1)  # ["/cmd@botname", "optional args"]
-    raw_cmd = parts[0].split("@")[0] if parts else ""  # strip @botname
-    tg_cmd = raw_cmd.lstrip("/")
-    args = parts[1] if len(parts) > 1 else ""
-    window_id = session_manager.resolve_window_for_thread(user.id, thread_id)
-    if not window_id:
-        await safe_reply(update.message, "\u274c No session bound to this topic.")
-        return
-
-    w = await tmux_manager.find_window_by_id(window_id)
-    if not w:
-        display = session_manager.get_display_name(window_id)
-        await safe_reply(update.message, f"\u274c Window '{display}' no longer exists.")
-        return
-
-    display = session_manager.get_display_name(window_id)
-    provider = get_provider_for_window(window_id)
-    await _sync_scoped_provider_menu(update.message, user.id, provider)
-    provider_map, current_supported = _get_provider_command_metadata(provider)
-    resolved_name = provider_map.get(tg_cmd, tg_cmd)
-    cc_name = resolved_name.lstrip("/")
-    if not args and cc_name in ("remote-control", "rc"):
-        args = display  # RC needs the window name as its session identifier
-    cc_slash = f"/{cc_name} {args}".rstrip() if args else f"/{cc_name}"
-    command_token = _normalize_slash_token(cc_slash)
-
-    supported_cache: dict[str, set[str]] = {
-        provider.capabilities.name: current_supported
-    }
-    if command_token not in current_supported and _command_known_in_other_provider(
-        command_token,
-        provider,
-        supported_cache=supported_cache,
-    ):
-        await safe_reply(
-            update.message,
-            f"\u274c [{display}] `{command_token}` is not supported by "
-            f"`{provider.capabilities.name}`.\n"
-            f"{_short_supported_commands(current_supported)}\n"
-            "Use /commands for the full list.",
-        )
-        return
-
-    logger.info(
-        "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
-    )
-    await update.message.get_bot().send_chat_action(
-        chat_id=update.message.chat.id,
-        message_thread_id=thread_id,
-        action=ChatAction.TYPING,
-    )
-    (
-        probe_transcript_path,
-        probe_transcript_offset,
-        probe_pane_before,
-    ) = await _capture_command_probe_context(window_id, provider)
-    status_probe_offset = _codex_status_probe_offset(window_id, cc_slash)
-    from .handlers.status_polling import clear_probe_failures
-
-    clear_probe_failures(window_id)
-    success, message = await session_manager.send_to_window(window_id, cc_slash)
-    if success:
-        if thread_id is not None:
-            from .handlers.command_history import record_command
-
-            record_command(user.id, thread_id, cc_slash)
-        await safe_reply(update.message, f"\u26a1 [{display}] Sent: {cc_slash}")
-        await _maybe_send_codex_status_snapshot(
-            update.message,
-            window_id,
-            display,
-            cc_slash,
-            since_offset=status_probe_offset,
-        )
-        _spawn_command_failure_probe(
-            update.message,
-            window_id,
-            display,
-            cc_slash,
-            provider=provider,
-            transcript_path=probe_transcript_path,
-            since_offset=probe_transcript_offset,
-            pane_before=probe_pane_before,
-        )
-        # If /clear command was sent, clear the session association
-        # so we can detect the new session after first message
-        if cc_slash.strip().lower() == "/clear":
-            logger.info("Clearing session for window %s after /clear", display)
-            session_manager.clear_window_session(window_id)
-            from .handlers.message_queue import enqueue_status_update
-            from .handlers.status_polling import (
-                clear_screen_buffer,
-                clear_seen_status,
-            )
-
-            await enqueue_status_update(
-                update.get_bot(), user.id, window_id, None, thread_id=thread_id
-            )
-            clear_seen_status(window_id)
-            clear_screen_buffer(window_id)
-    else:
-        await safe_reply(update.message, f"\u274c {message}")
-
-
-def _command_known_in_other_provider(
-    command_token: str,
-    current_provider: AgentProvider,
-    *,
-    supported_cache: dict[str, set[str]] | None = None,
-) -> bool:
-    """Return True when command exists in any provider except the current one."""
-    current_name = current_provider.capabilities.name
-    for name in registry.provider_names():
-        if name == current_name:
-            continue
-        if supported_cache is not None and name in supported_cache:
-            supported = supported_cache[name]
-        else:
-            provider = registry.get(name)
-            _, supported = _get_provider_command_metadata(provider)
-            if supported_cache is not None:
-                supported_cache[name] = supported
-        if command_token in supported:
-            return True
-    return False
-
-
-async def _capture_command_probe_context(
-    window_id: str,
-    provider: AgentProvider,
-) -> tuple[str | None, int | None, str | None]:
-    """Capture transcript offset + pane snapshot before sending a command."""
-    transcript_path = session_manager.get_window_state(window_id).transcript_path
-    since_offset: int | None = None
-    if transcript_path:
-        try:
-            if provider.capabilities.supports_incremental_read:
-                since_offset = Path(transcript_path).stat().st_size
-            else:
-                _, since_offset = await asyncio.to_thread(
-                    provider.read_transcript_file,
-                    transcript_path,
-                    0,
-                )
-        except OSError:
-            since_offset = None
-    pane_before = await tmux_manager.capture_pane(window_id)
-    return transcript_path or None, since_offset, pane_before
-
-
-async def _probe_transcript_command_error(
-    provider: AgentProvider,
-    transcript_path: str | None,
-    since_offset: int | None,
-) -> str | None:
-    """Return first command-like error line found in transcript delta."""
-    if not transcript_path or since_offset is None:
-        return None
-
-    def _read_incremental_entries(path: str, offset: int) -> list[dict]:
-        entries: list[dict] = []
-        with Path(path).open("r", encoding="utf-8") as fh:
-            fh.seek(offset)
-            for line in fh:
-                parsed = provider.parse_transcript_line(line)
-                if parsed:
-                    entries.append(parsed)
-        return entries
-
-    try:
-        if provider.capabilities.supports_incremental_read:
-            entries = await asyncio.to_thread(
-                _read_incremental_entries,
-                transcript_path,
-                since_offset,
-            )
-        else:
-            entries, _ = await asyncio.to_thread(
-                provider.read_transcript_file,
-                transcript_path,
-                since_offset,
-            )
-    except OSError, NotImplementedError:
-        return None
-
-    messages, _ = provider.parse_transcript_entries(entries, pending_tools={})
-    for msg in messages:
-        if msg.role != "assistant":
-            continue
-        found = _extract_probe_error_line(msg.text)
-        if found:
-            return found
-    return None
-
-
-async def _maybe_send_command_failure_message(
-    message: Message,
-    window_id: str,
-    display: str,
-    cc_slash: str,
-    *,
-    provider: AgentProvider,
-    transcript_path: str | None,
-    since_offset: int | None,
-    pane_before: str | None,
-) -> None:
-    """Probe transcript/pane for quick command failures and surface them."""
-    await asyncio.sleep(_COMMAND_ERROR_PROBE_DELAY_SECONDS)
-
-    error_line = await _probe_transcript_command_error(
-        provider,
-        transcript_path,
-        since_offset,
-    )
-    if not error_line:
-        pane_after = await tmux_manager.capture_pane(window_id)
-        pane_delta = _extract_pane_delta(pane_before, pane_after)
-        error_line = _extract_probe_error_line(pane_delta)
-    if error_line:
-        await safe_reply(
-            message,
-            f"\u274c [{display}] `{cc_slash}` failed\n> {error_line}",
-        )
-
-
-def _spawn_command_failure_probe(
-    message: Message,
-    window_id: str,
-    display: str,
-    cc_slash: str,
-    *,
-    provider: AgentProvider,
-    transcript_path: str | None,
-    since_offset: int | None,
-    pane_before: str | None,
-) -> None:
-    async def _run() -> None:
-        await _maybe_send_command_failure_message(
-            message,
-            window_id,
-            display,
-            cc_slash,
-            provider=provider,
-            transcript_path=transcript_path,
-            since_offset=since_offset,
-            pane_before=pane_before,
-        )
-
-    task = asyncio.create_task(_run())
-    task.add_done_callback(task_done_callback)
-
-
-def _codex_status_probe_offset(window_id: str, cc_slash: str) -> int | None:
-    """Return transcript file offset before sending codex /status(/stats)."""
-    command = cc_slash.split(None, 1)[0].lower()
-    if command not in ("/status", "/stats"):
-        return None
-
-    provider = get_provider_for_window(window_id)
-    if provider.capabilities.name != "codex":
-        return None
-
-    transcript_path = session_manager.get_window_state(window_id).transcript_path
-    if not transcript_path:
-        return None
-
-    try:
-        return Path(transcript_path).stat().st_size
-    except OSError:
-        return None
-
-
-async def _maybe_send_codex_status_snapshot(
-    message: Message,
-    window_id: str,
-    display: str,
-    cc_slash: str,
-    *,
-    since_offset: int | None = None,
-) -> None:
-    """Send transcript-based Codex status fallback for /status and /stats."""
-    command = cc_slash.split(None, 1)[0].lower()
-    if command not in ("/status", "/stats"):
-        return
-
-    provider = get_provider_for_window(window_id)
-    if provider.capabilities.name != "codex":
-        return
-
-    state = session_manager.get_window_state(window_id)
-    transcript_path = state.transcript_path
-    if not transcript_path:
-        await safe_reply(
-            message,
-            f"[{display}] Codex status snapshot unavailable (no transcript path).",
-        )
-        return
-
-    if since_offset is not None:
-        await asyncio.sleep(_CODEX_STATUS_FALLBACK_DELAY_SECONDS)
-        has_native_output = await asyncio.to_thread(
-            has_codex_assistant_output_since,
-            transcript_path,
-            since_offset,
-        )
-        if has_native_output:
-            return
-
-    snapshot = await asyncio.to_thread(
-        build_codex_status_snapshot,
-        transcript_path,
-        display_name=display,
-        session_id=state.session_id,
-        cwd=state.cwd,
-    )
-    if snapshot:
-        await safe_reply(message, snapshot)
-        return
-
-    await safe_reply(
-        message,
-        f"[{display}] Codex status snapshot unavailable (transcript unreadable).",
     )
 
 
@@ -1007,7 +366,7 @@ async def screenshot_command(
             await safe_reply(update.message, "\u274c Use this command inside a topic.")
         return
 
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(
             update.message, "\u274c This topic is not bound to any session."
@@ -1031,7 +390,7 @@ async def screenshot_command(
 
     png_bytes = await text_to_image(pane_text, with_ansi=True)
     keyboard = build_screenshot_keyboard(window_id)
-    chat_id = session_manager.resolve_chat_id(user.id, thread_id)
+    chat_id = thread_router.resolve_chat_id(user.id, thread_id)
     try:
         await update.message.get_bot().send_document(
             chat_id=chat_id,
@@ -1067,7 +426,7 @@ async def panes_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
             await safe_reply(update.message, "\u274c Use this command inside a topic.")
         return
 
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(
             update.message, "\u274c This topic is not bound to any session."
@@ -1082,7 +441,7 @@ async def panes_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    from .handlers.status_polling import has_pane_alert
+    from .handlers.polling_strategies import has_pane_alert
 
     lines = [f"\U0001f4d0 {len(panes)} panes in window\n"]
     buttons: list[InlineKeyboardButton] = []
@@ -1178,7 +537,7 @@ async def toolbar_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
             await safe_reply(update.message, "\u274c Use this command inside a topic.")
         return
 
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(
             update.message, "\u274c This topic is not bound to any session."
@@ -1188,7 +547,7 @@ async def toolbar_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
     from .handlers.screenshot_callbacks import build_toolbar_keyboard
 
     keyboard = build_toolbar_keyboard(window_id)
-    display = session_manager.get_display_name(window_id)
+    display = thread_router.get_display_name(window_id)
     await safe_reply(
         update.message,
         f"\U0001f39b `{display}` toolbar",
@@ -1218,7 +577,7 @@ async def verbose_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
             await safe_reply(update.message, "\u274c Use this command inside a topic.")
         return
 
-    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if not window_id:
         await safe_reply(
             update.message, "\u274c This topic is not bound to any session."
@@ -1294,155 +653,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await _sync_scoped_menu_for_text_context(update, user.id)
     await handle_text_message(update, context)
-
-
-# --- Callback query handler (thin dispatcher) ---
-
-# Callback prefixes that route to dedicated handler modules.
-# Order matters: prefixes checked via startswith must be longest-first
-# to avoid false matches (e.g. CB_SESSIONS_KILL_CONFIRM before CB_SESSIONS_KILL).
-_CB_HISTORY = (CB_HISTORY_PREV, CB_HISTORY_NEXT)
-_CB_DIRECTORY = (
-    CB_DIR_FAV,
-    CB_DIR_STAR,
-    CB_DIR_SELECT,
-    CB_DIR_UP,
-    CB_DIR_HOME,
-    CB_DIR_PAGE,
-    CB_DIR_CONFIRM,
-    CB_PROV_SELECT,
-    CB_MODE_SELECT,
-    CB_DIR_CANCEL,
-)
-_CB_WINDOW = (CB_WIN_BIND, CB_WIN_NEW, CB_WIN_CANCEL)
-_CB_SCREENSHOT = (
-    CB_SCREENSHOT_REFRESH,
-    CB_STATUS_RECALL,
-    CB_STATUS_ESC,
-    CB_STATUS_NOTIFY,
-    CB_STATUS_SCREENSHOT,
-    CB_KEYS_PREFIX,
-    CB_PANE_SCREENSHOT,
-    CB_STATUS_REMOTE,
-    CB_TOOLBAR_CTRLC,
-    CB_TOOLBAR_DISMISS,
-)
-_CB_RECOVERY = (
-    CB_RECOVERY_BACK,
-    CB_RECOVERY_FRESH,
-    CB_RECOVERY_CONTINUE,
-    CB_RECOVERY_RESUME,
-    CB_RECOVERY_PICK,
-    CB_RECOVERY_CANCEL,
-)
-_CB_VOICE = (CB_VOICE,)
-_CB_RESUME = (CB_RESUME_PICK, CB_RESUME_PAGE, CB_RESUME_CANCEL)
-_CB_SHELL = (
-    CB_SHELL_RUN,
-    CB_SHELL_EDIT,
-    CB_SHELL_CANCEL,
-    CB_SHELL_CONFIRM_DANGER,
-)
-
-
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Dispatch callback queries to dedicated handler modules."""
-    # CallbackQueryHandler doesn't support filters= param, so check inline.
-    if config.group_id:
-        chat = update.effective_chat
-        if not chat or chat.id != config.group_id:
-            return
-
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        await query.answer("Not authorized")
-        return
-
-    # Store group chat_id for forum topic message routing
-    if query.message and query.message.chat.type in ("group", "supergroup"):
-        cb_thread_id = _get_thread_id(update)
-        if cb_thread_id is not None:
-            session_manager.set_group_chat_id(
-                user.id, cb_thread_id, query.message.chat.id
-            )
-
-    data = query.data
-
-    # History pagination
-    if data.startswith(_CB_HISTORY):
-        await handle_history_callback(query, user.id, data, update, context)
-
-    # Directory browser
-    elif data.startswith(_CB_DIRECTORY):
-        await handle_directory_callback(query, user.id, data, update, context)
-
-    # Window picker
-    elif data.startswith(_CB_WINDOW):
-        await handle_window_callback(query, user.id, data, update, context)
-
-    # Screenshot / status buttons / quick keys
-    elif data.startswith(_CB_SCREENSHOT):
-        await handle_screenshot_callback(query, user.id, data, update, context)
-
-    # No-op
-    elif data == "noop":
-        await query.answer()
-
-    # Interactive UI (AskUserQuestion / ExitPlanMode navigation)
-    elif _match_interactive_prefix(data):
-        await handle_interactive_callback(query, user.id, data, update, context)
-
-    # Recovery UI
-    elif data.startswith(_CB_RECOVERY):
-        await handle_recovery_callback(query, user.id, data, update, context)
-
-    # Resume command UI
-    elif data.startswith(_CB_RESUME):
-        await handle_resume_command_callback(query, user.id, data, update, context)
-
-    # Sessions dashboard
-    elif data == CB_SESSIONS_REFRESH:
-        await handle_sessions_refresh(query, user.id)
-        await query.answer("Refreshed")
-    elif data == CB_SESSIONS_NEW:
-        await query.answer("Create a new topic to start a session.")
-    elif data.startswith(CB_SESSIONS_KILL_CONFIRM):
-        window_id = data[len(CB_SESSIONS_KILL_CONFIRM) :]
-        if not _user_owns_window(user.id, window_id):
-            await query.answer("Not your session", show_alert=True)
-            return
-        await handle_sessions_kill_confirm(query, user.id, window_id, context.bot)
-        await query.answer("Killed")
-    elif data.startswith(CB_SESSIONS_KILL):
-        window_id = data[len(CB_SESSIONS_KILL) :]
-        if not _user_owns_window(user.id, window_id):
-            await query.answer("Not your session", show_alert=True)
-            return
-        await handle_sessions_kill(query, user.id, window_id)
-        await query.answer()
-
-    # Voice message callbacks
-    elif data.startswith(_CB_VOICE):
-        await handle_voice_callback(update, context)
-
-    # Shell command approval
-    elif data.startswith(_CB_SHELL):
-        from .handlers.shell_commands import handle_shell_callback
-
-        thread_id = _get_thread_id(update)
-        await handle_shell_callback(query, user.id, data, context.bot, thread_id)
-
-    # Sync command
-    elif data == CB_SYNC_FIX:
-        await handle_sync_fix(query)
-        await query.answer("Fixed")
-    elif data == CB_SYNC_DISMISS:
-        await handle_sync_dismiss(query)
-        await query.answer("Dismissed")
 
 
 # --- Streaming response / notifications ---
@@ -1558,176 +768,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     pass
 
 
-# --- Auto-create topic for new tmux windows ---
-
-
-async def _handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
-    """Create a Telegram forum topic for a newly detected tmux window.
-
-    Skips if the window is already bound to a topic. Creates one topic per
-    unique group chat, binds all users in that chat.
-    """
-
-    # Check if this window is already bound to any topic
-    for _, _, bound_wid in session_manager.iter_thread_bindings():
-        if bound_wid == event.window_id:
-            logger.debug(
-                "New window %s already bound, skipping topic creation", event.window_id
-            )
-            return
-
-    # Auto-detect provider from the running process (only if not already set).
-    # detect_provider_from_command returns "" for unrecognized commands (shells),
-    # so we only persist when a known CLI is confidently identified.
-    existing_provider = session_manager.get_window_state(event.window_id).provider_name
-    if not existing_provider:
-        w = await tmux_manager.find_window_by_id(event.window_id)
-        if w and w.pane_current_command:
-            detected = await detect_provider_from_pane(
-                w.pane_current_command,
-                pane_tty=w.pane_tty,
-                window_id=event.window_id,
-            )
-            if not detected and should_probe_pane_title_for_provider_detection(
-                w.pane_current_command
-            ):
-                pane_title = await tmux_manager.get_pane_title(event.window_id)
-                detected = detect_provider_from_runtime(
-                    w.pane_current_command,
-                    pane_title=pane_title,
-                )
-            if detected:
-                session_manager.set_window_provider(event.window_id, detected)
-                logger.info(
-                    "Auto-detected provider %r for window %s (command=%s)",
-                    detected,
-                    event.window_id,
-                    w.pane_current_command,
-                )
-
-    topic_name = event.window_name or Path(event.cwd).name or event.window_id
-
-    # Collect unique chat_ids from existing bindings
-    seen_chats: set[int] = set()
-    for user_id, thread_id, _ in session_manager.iter_thread_bindings():
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-        if chat_id != user_id:  # Only group chats (not fallback to user_id)
-            seen_chats.add(chat_id)
-
-    # Fallback: use preserved group_chat_ids (post-restart, no bindings left)
-    if not seen_chats:
-        seen_chats.update(
-            cid for cid in session_manager.group_chat_ids.values() if cid < 0
-        )
-
-    if not seen_chats:
-        if config.group_id:
-            seen_chats.add(config.group_id)
-            logger.info(
-                "Cold-start: using CCBOT_GROUP_ID=%d for auto-topic (window %s)",
-                config.group_id,
-                event.window_id,
-            )
-        else:
-            logger.debug(
-                "No group chats found for auto-topic creation (window %s)",
-                event.window_id,
-            )
-            return
-
-    for chat_id in seen_chats:
-        retry_until = _topic_create_retry_until.get(chat_id, 0.0)
-        now = time.monotonic()
-        if now < retry_until:
-            wait_seconds = max(1, int(retry_until - now))
-            logger.debug(
-                "Skipping auto-topic creation for chat %d (window %s), "
-                "backoff active for %ss",
-                chat_id,
-                event.window_id,
-                wait_seconds,
-            )
-            continue
-
-        try:
-            topic = await bot.create_forum_topic(chat_id=chat_id, name=topic_name)
-            _topic_create_retry_until.pop(chat_id, None)
-            logger.info(
-                "Auto-created topic '%s' (thread=%d) in chat %d for window %s",
-                topic_name,
-                topic.message_thread_id,
-                chat_id,
-                event.window_id,
-            )
-            # Bind one user to establish the route for this chat.
-            # In cold-start (no existing bindings), use the first allowed user.
-            bound = False
-            for user_id, thread_id, _ in session_manager.iter_thread_bindings():
-                if session_manager.resolve_chat_id(user_id, thread_id) == chat_id:
-                    session_manager.bind_thread(
-                        user_id,
-                        topic.message_thread_id,
-                        event.window_id,
-                        window_name=topic_name,
-                    )
-                    session_manager.set_group_chat_id(
-                        user_id, topic.message_thread_id, chat_id
-                    )
-                    bound = True
-                    break
-            if not bound and config.allowed_users:
-                first_user_id = next(iter(config.allowed_users))
-                session_manager.bind_thread(
-                    first_user_id,
-                    topic.message_thread_id,
-                    event.window_id,
-                    window_name=topic_name,
-                )
-                session_manager.set_group_chat_id(
-                    first_user_id, topic.message_thread_id, chat_id
-                )
-        except RetryAfter as e:
-            retry_after_seconds = (
-                e.retry_after
-                if isinstance(e.retry_after, int)
-                else int(e.retry_after.total_seconds())
-            )
-            retry_after_seconds = max(1, retry_after_seconds)
-            _topic_create_retry_until[chat_id] = (
-                time.monotonic()
-                + retry_after_seconds
-                + _TOPIC_CREATE_RETRY_BUFFER_SECONDS
-            )
-            logger.warning(
-                "Flood control creating topic for window %s in chat %d, "
-                "backing off %ss",
-                event.window_id,
-                chat_id,
-                retry_after_seconds,
-            )
-        except TelegramError:
-            logger.exception(
-                "Failed to create topic for window %s in chat %d",
-                event.window_id,
-                chat_id,
-            )
-
-
 # --- App lifecycle ---
-
-
-async def _adopt_unbound_windows(bot: Bot) -> None:
-    """Auto-adopt known-but-unbound windows (post-restart recovery)."""
-    all_windows = await tmux_manager.list_windows()
-    live_ids = {w.window_id for w in all_windows}
-    live_pairs = [(w.window_id, w.window_name) for w in all_windows]
-    audit = session_manager.audit_state(live_ids, live_pairs)
-    orphaned = [i for i in audit.issues if i.category == "orphaned_window"]
-    if orphaned:
-        from .handlers.sync_command import _adopt_orphaned_windows
-
-        await _adopt_orphaned_windows(bot, orphaned)
-        logger.info("Startup: adopted %d unbound window(s)", len(orphaned))
 
 
 def _global_exception_handler(
@@ -1747,7 +788,7 @@ def _global_exception_handler(
 
 
 async def post_init(application: Application) -> None:
-    global session_monitor, _status_poll_task, _global_provider_menu
+    global session_monitor, _status_poll_task
 
     # Install global asyncio exception handler as safety net
     asyncio.get_running_loop().set_exception_handler(_global_exception_handler)
@@ -1757,22 +798,7 @@ async def post_init(application: Application) -> None:
         await register_commands(application.bot, provider=default_provider)
     except TelegramError:
         logger.warning("Failed to register bot commands at startup, will retry later")
-    _global_provider_menu = default_provider.capabilities.name
-
-    # Refresh bot command menu every 10 minutes.
-    async def _refresh_commands(context: ContextTypes.DEFAULT_TYPE) -> None:
-        global _global_provider_menu
-        if context.bot:
-            try:
-                refreshed_provider = get_provider()
-                await register_commands(context.bot, provider=refreshed_provider)
-                _global_provider_menu = refreshed_provider.capabilities.name
-            except _CommandRefreshError:
-                logger.exception("Failed to refresh CC commands, keeping previous menu")
-
-    jq = getattr(application, "job_queue", None)
-    if jq is not None:
-        jq.run_repeating(_refresh_commands, interval=600, first=600)
+    setup_menu_refresh_job(application)
 
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await session_manager.resolve_stale_ids()
@@ -1882,12 +908,13 @@ async def post_shutdown(_application: Application) -> None:
         _status_poll_task = None
         logger.info("Status polling stopped")
 
-    # Stop all queue workers
-    await shutdown_workers()
-
+    # Stop session monitor first (it may enqueue messages to workers)
     if session_monitor:
         session_monitor.stop()
         logger.info("Session monitor stopped")
+
+    # Stop all queue workers after monitor is stopped
+    await shutdown_workers()
 
     # Flush debounced state to disk AFTER workers/monitor stop (captures final mutations)
     session_manager.flush_state()
@@ -1970,7 +997,8 @@ def create_bot() -> Application:
     application.add_handler(
         CommandHandler("restore", restore_command, filters=_group_filter)
     )
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    _load_callback_handlers()
+    application.add_handler(CallbackQueryHandler(_dispatch_callback))
     # Topic closed event — unbind window (kept alive for rebinding)
     application.add_handler(
         MessageHandler(

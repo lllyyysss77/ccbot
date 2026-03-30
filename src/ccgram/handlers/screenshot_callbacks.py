@@ -30,6 +30,7 @@ from telegram.ext import ContextTypes
 
 from ..screenshot import text_to_image
 from ..session import session_manager
+from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_KEYS_PREFIX,
@@ -45,6 +46,7 @@ from .callback_data import (
     NOTIFY_MODE_LABELS,
 )
 from .callback_helpers import get_thread_id, user_owns_window
+from .callback_registry import register
 
 logger = structlog.get_logger()
 
@@ -108,7 +110,7 @@ def build_screenshot_keyboard(
 
 def build_toolbar_keyboard(window_id: str) -> InlineKeyboardMarkup:
     """Build inline keyboard for /toolbar command."""
-    from .status_polling import is_rc_active
+    from .polling_strategies import is_rc_active
 
     rc_label = "\U0001f4e1\u2713 RC" if is_rc_active(window_id) else "\U0001f4e1 RC"
     return InlineKeyboardMarkup(
@@ -175,7 +177,7 @@ async def _handle_pane_screenshot(
     if thread_id is None:
         await query.answer("Use in a topic", show_alert=True)
         return
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
     try:
         await query.get_bot().send_document(
             chat_id=chat_id,
@@ -192,7 +194,7 @@ async def _handle_pane_screenshot(
 
 async def _handle_remote_control(query: CallbackQuery, user_id: int, data: str) -> None:
     """Handle CB_STATUS_REMOTE: activate Remote Control or show status."""
-    from .status_polling import is_rc_active
+    from .polling_strategies import is_rc_active
 
     window_id = data[len(CB_STATUS_REMOTE) :]
     if not user_owns_window(user_id, window_id):
@@ -201,7 +203,7 @@ async def _handle_remote_control(query: CallbackQuery, user_id: int, data: str) 
     if is_rc_active(window_id):
         await query.answer("\U0001f4e1 Remote Control active")
     else:
-        display = session_manager.get_display_name(window_id)
+        display = thread_router.get_display_name(window_id)
         await session_manager.send_to_window(window_id, f"/remote-control {display}")
         await query.answer("\U0001f4e1 Activating\u2026")
 
@@ -339,7 +341,7 @@ async def _handle_status_recall(
     if thread_id is None:
         await query.answer("Use in a topic", show_alert=True)
         return
-    if session_manager.resolve_window_for_thread(user_id, thread_id) != window_id:
+    if thread_router.resolve_window_for_thread(user_id, thread_id) != window_id:
         await query.answer("Stale status button", show_alert=True)
         return
 
@@ -396,7 +398,7 @@ async def _handle_status_screenshot(
     if thread_id is None:
         await query.answer("Use in a topic", show_alert=True)
         return
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
     try:
         await query.get_bot().send_document(
             chat_id=chat_id,
@@ -495,3 +497,25 @@ async def _handle_keys(query: CallbackQuery, user_id: int, data: str) -> None:
                 ),
                 reply_markup=keyboard,
             )
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(
+    CB_SCREENSHOT_REFRESH,
+    CB_STATUS_RECALL,
+    CB_STATUS_ESC,
+    CB_STATUS_NOTIFY,
+    CB_STATUS_SCREENSHOT,
+    CB_KEYS_PREFIX,
+    CB_PANE_SCREENSHOT,
+    CB_STATUS_REMOTE,
+    CB_TOOLBAR_CTRLC,
+    CB_TOOLBAR_DISMISS,
+)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    assert query is not None and query.data is not None and user is not None
+    await handle_screenshot_callback(query, user.id, query.data, update, context)

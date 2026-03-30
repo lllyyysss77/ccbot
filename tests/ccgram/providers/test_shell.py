@@ -1,21 +1,12 @@
-"""Tests for ShellProvider — shell-specific behavior beyond contract tests.
-
-Contract tests (test_provider_contracts.py) skip transcript-related branches
-for ShellProvider via ``pytest.skip("No transcript support")``. These tests
-verify the override behavior directly and assert exact capability values.
-"""
-
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ccgram.providers.shell import ShellProvider, detect_pane_shell
+from ccgram.providers.shell import PromptMatch, ShellProvider, detect_pane_shell
 from ccgram.tmux_manager import TmuxWindow
 
 
 class TestShellCapabilities:
-    """Verify exact capability values — contract tests only check name is truthy."""
-
     @pytest.fixture
     def caps(self):
         return ShellProvider().capabilities
@@ -42,13 +33,6 @@ class TestShellCapabilities:
 
 
 class TestShellOverrides:
-    """ShellProvider overrides that differ from JsonlProvider base class.
-
-    The base class (JsonlProvider) has different behavior for each of these
-    methods. ShellProvider overrides them to return no-op/empty values because
-    shell sessions have no structured transcripts, no hooks, and no commands.
-    """
-
     @pytest.fixture
     def provider(self) -> ShellProvider:
         return ShellProvider()
@@ -241,7 +225,6 @@ class TestSetupShellPrompt:
         await setup_shell_prompt("@0")
 
         calls = mock_tmux.send_keys.call_args_list
-        # calls[0] is the C-c to clear partial input, calls[1] is the prompt command
         prompt_call = calls[1]
         assert expected_substring in prompt_call[0][1]
 
@@ -261,7 +244,6 @@ class TestSetupShellPrompt:
         await setup_shell_prompt("@0")
 
         calls = mock_tmux.send_keys.call_args_list
-        # calls: [0]=C-c, [1]=prompt command, [2]=clear
         assert len(calls) == 3
         assert calls[2][0][1] == "clear"
 
@@ -281,7 +263,6 @@ class TestSetupShellPrompt:
         await setup_shell_prompt("@0")
 
         calls = mock_tmux.send_keys.call_args_list
-        # calls[1] = prompt command, calls[2] = clear — both should use raw=True
         assert calls[1][1].get("raw") is True
         assert calls[2][1].get("raw") is True
 
@@ -320,7 +301,51 @@ class TestGetShellName:
             assert get_shell_name() == "fish"
 
 
-# ── Wrap-mode tests ──────────────────────────────────────────────────────
+class TestPromptMatch:
+    def test_prompt_match_frozen(self) -> None:
+        pm = PromptMatch(
+            sequence_number=0, trailing_text="ls", exit_code=0, raw_line="⌘0⌘ ls"
+        )
+        with pytest.raises(AttributeError):
+            pm.exit_code = 1  # type: ignore[misc]
+
+    @pytest.mark.usefixtures("_wrap_mode")
+    def test_wrap_mode_bare_prompt(self) -> None:
+        from ccgram.providers.shell import match_prompt
+
+        m = match_prompt("~/code ❯ ⌘0⌘ ")
+        assert m is not None
+        assert m.sequence_number == 0
+        assert m.exit_code == 0
+        assert m.trailing_text.strip() == ""
+        assert m.raw_line == "~/code ❯ ⌘0⌘ "
+
+    @pytest.mark.usefixtures("_wrap_mode")
+    def test_wrap_mode_with_trailing(self) -> None:
+        from ccgram.providers.shell import match_prompt
+
+        m = match_prompt("~/code ❯ ⌘0⌘ git status")
+        assert m is not None
+        assert m.sequence_number == 0
+        assert m.exit_code == 0
+        assert m.trailing_text == "git status"
+        assert m.raw_line == "~/code ❯ ⌘0⌘ git status"
+
+    def test_replace_mode_bare_prompt(self) -> None:
+        from ccgram.config import config
+        from ccgram.providers.shell import match_prompt
+
+        original = config.prompt_mode
+        config.prompt_mode = "replace"
+        try:
+            m = match_prompt("ccgram:0❯ ")
+            assert m is not None
+            assert m.sequence_number == 0
+            assert m.exit_code == 0
+            assert m.trailing_text.strip() == ""
+            assert m.raw_line == "ccgram:0❯ "
+        finally:
+            config.prompt_mode = original
 
 
 @pytest.mark.usefixtures("_wrap_mode")
@@ -330,24 +355,26 @@ class TestWrapModeRegex:
 
         m = match_prompt("~/code main ❯ ⌘0⌘ ls -la")
         assert m is not None
-        assert m.group(1) == "0"
-        assert m.group(2) == "ls -la"
+        assert isinstance(m, PromptMatch)
+        assert m.exit_code == 0
+        assert m.trailing_text == "ls -la"
+        assert m.raw_line == "~/code main ❯ ⌘0⌘ ls -la"
 
     def test_match_prompt_bare_prompt_idle(self) -> None:
         from ccgram.providers.shell import match_prompt
 
         m = match_prompt("~/code main ❯ ⌘0⌘ ")
         assert m is not None
-        assert m.group(1) == "0"
-        assert m.group(2).strip() == ""
+        assert m.exit_code == 0
+        assert m.trailing_text.strip() == ""
 
     def test_match_prompt_nonzero_exit(self) -> None:
         from ccgram.providers.shell import match_prompt
 
         m = match_prompt("~/code main ❯ ⌘127⌘ bad-cmd")
         assert m is not None
-        assert m.group(1) == "127"
-        assert m.group(2) == "bad-cmd"
+        assert m.exit_code == 127
+        assert m.trailing_text == "bad-cmd"
 
     def test_match_prompt_no_marker(self) -> None:
         from ccgram.providers.shell import match_prompt
@@ -359,7 +386,7 @@ class TestWrapModeRegex:
 
         m = match_prompt("⌘0⌘")
         assert m is not None
-        assert m.group(1) == "0"
+        assert m.exit_code == 0
 
 
 @pytest.mark.usefixtures("_wrap_mode")
@@ -405,7 +432,6 @@ class TestWrapModeSetup:
         await setup_shell_prompt("@0")
 
         calls = mock_tmux.send_keys.call_args_list
-        # calls[0] is C-c, calls[1] is the prompt command
         prompt_call = calls[1]
         assert expected_substring in prompt_call[0][1]
 
@@ -425,8 +451,8 @@ class TestWrapModeSetup:
         await setup_shell_prompt("@0")
 
         cmd = mock_tmux.send_keys.call_args_list[1][0][1]
-        assert "functions --copy fish_prompt __ccgram_orig_prompt" in cmd
-        assert "functions --query __ccgram_orig_prompt" in cmd
+        assert "builtin functions --copy fish_prompt __ccgram_orig_prompt" in cmd
+        assert "builtin functions --query __ccgram_orig_prompt" in cmd
         assert "__ccgram_orig_prompt" in cmd
         assert "⌘%d⌘" in cmd
         assert "set_color brblack" in cmd
@@ -442,9 +468,6 @@ class TestWrapModeSetup:
 
         mock_tmux.capture_pane = AsyncMock(return_value="~/code main ❯ ")
         assert await has_prompt_marker("@0") is False
-
-
-# ── Prompt mode resolution tests ─────────────────────────────────────────
 
 
 class TestGetPromptMode:
@@ -484,8 +507,6 @@ class TestGetPromptMode:
 
 
 class TestMatchPromptModeSwitching:
-    """Verify match_prompt uses re.match in replace mode and re.search in wrap."""
-
     def test_replace_mode_anchors_at_start(self) -> None:
         from ccgram.config import config
         from ccgram.providers.shell import match_prompt
@@ -500,8 +521,8 @@ class TestMatchPromptModeSwitching:
 
         m = match_prompt("~/code main ❯ ⌘0⌘ ls")
         assert m is not None
-        assert m.group(1) == "0"
-        assert m.group(2) == "ls"
+        assert m.exit_code == 0
+        assert m.trailing_text == "ls"
 
     @pytest.mark.usefixtures("_wrap_mode")
     def test_wrap_mode_matches_marker_at_start(self) -> None:
@@ -509,10 +530,7 @@ class TestMatchPromptModeSwitching:
 
         m = match_prompt("⌘0⌘ ls")
         assert m is not None
-        assert m.group(2) == "ls"
-
-
-# ── Setup command content tests ──────────────────────────────────────────
+        assert m.trailing_text == "ls"
 
 
 class TestWrapSetupCommands:
@@ -522,7 +540,7 @@ class TestWrapSetupCommands:
             ("fish", "__ccgram_orig_prompt"),
             ("fish", "set_color brblack"),
             ("fish", "or function __ccgram_orig_prompt"),
-            ("fish", "functions --query __ccgram_orig_prompt"),
+            ("fish", "builtin functions --query __ccgram_orig_prompt"),
             ("bash", "PROMPT_COMMAND"),
             ("bash", "⌘\\${__ccgram_x}⌘"),
             ("bash", "type __ccgram_sc"),
@@ -595,8 +613,6 @@ class TestReplaceSetupCommands:
 
 
 class TestSetupShellPromptClearsBefore:
-    """Verify setup_shell_prompt sends C-c to cancel partial input."""
-
     @pytest.fixture
     def mock_tmux(self):
         with (
@@ -646,6 +662,5 @@ class TestSetupShellPromptClearsBefore:
         await setup_shell_prompt("@0", clear=False)
 
         calls = mock_tmux.send_keys.call_args_list
-        # calls: [0]=C-c, [1]=prompt command (no clear)
         assert len(calls) == 2
         assert all(c[0][1] != "clear" for c in calls)

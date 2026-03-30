@@ -353,9 +353,9 @@ class TestPollingAndCleanupIntegration:
             patch("ccgram.handlers.cleanup.clear_interactive_msg"),
             patch("ccgram.handlers.cleanup.clear_topic_emoji_state"),
             patch("ccgram.handlers.cleanup.clear_tool_msg_ids_for_topic"),
-            patch("ccgram.handlers.status_polling.session_manager") as mock_sm,
+            patch("ccgram.thread_router.thread_router") as mock_tr,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             await clear_topic_state(1, 42, bot=AsyncMock(), window_id="@7")
         assert "@7" not in _vim_state
 
@@ -369,9 +369,9 @@ class TestPollingAndCleanupIntegration:
             patch("ccgram.handlers.cleanup.clear_interactive_msg"),
             patch("ccgram.handlers.cleanup.clear_topic_emoji_state"),
             patch("ccgram.handlers.cleanup.clear_tool_msg_ids_for_topic"),
-            patch("ccgram.handlers.status_polling.session_manager") as mock_sm,
+            patch("ccgram.thread_router.thread_router") as mock_tr,
         ):
-            mock_sm.resolve_chat_id.return_value = -100
+            mock_tr.resolve_chat_id.return_value = -100
             await clear_topic_state(1, 42, bot=AsyncMock(), window_id=None)
         # Vim state for @7 should remain untouched
         assert _vim_state["@7"] is True
@@ -380,11 +380,11 @@ class TestPollingAndCleanupIntegration:
         """Polling calls notify_vim_insert_seen when INSERT is in last 3 lines."""
         with (
             patch(
-                "ccgram.handlers.status_polling.tmux_manager.find_window_by_id",
+                "ccgram.handlers.polling_coordinator.tmux_manager.find_window_by_id",
                 new_callable=AsyncMock,
             ) as mock_find,
             patch(
-                "ccgram.handlers.status_polling.tmux_manager.capture_pane",
+                "ccgram.handlers.polling_coordinator.tmux_manager.capture_pane",
                 new_callable=AsyncMock,
                 return_value="output\nprompt\n-- INSERT --",
             ),
@@ -392,13 +392,18 @@ class TestPollingAndCleanupIntegration:
                 "ccgram.tmux_manager.notify_vim_insert_seen",
                 wraps=notify_vim_insert_seen,
             ) as mock_notify,
-            patch("ccgram.handlers.status_polling._parse_with_pyte", return_value=None),
-            patch("ccgram.handlers.status_polling.get_provider_for_window") as mock_gpw,
             patch(
-                "ccgram.handlers.status_polling.get_interactive_window",
+                "ccgram.handlers.polling_coordinator._parse_with_pyte",
                 return_value=None,
             ),
-            patch("ccgram.handlers.status_polling._handle_no_status"),
+            patch(
+                "ccgram.handlers.polling_coordinator.get_provider_for_window"
+            ) as mock_gpw,
+            patch(
+                "ccgram.handlers.polling_coordinator.get_interactive_window",
+                return_value=None,
+            ),
+            patch("ccgram.handlers.polling_coordinator._handle_no_status"),
         ):
             from unittest.mock import MagicMock
 
@@ -411,7 +416,7 @@ class TestPollingAndCleanupIntegration:
             mock_provider.capabilities.uses_pane_title = False
             mock_gpw.return_value = mock_provider
 
-            from ccgram.handlers.status_polling import update_status_message
+            from ccgram.handlers.polling_coordinator import update_status_message
 
             await update_status_message(AsyncMock(), 1, "@9", thread_id=42)
         mock_notify.assert_called_once_with("@9")
@@ -420,11 +425,11 @@ class TestPollingAndCleanupIntegration:
         """Polling does NOT call notify when INSERT is only in historical output."""
         with (
             patch(
-                "ccgram.handlers.status_polling.tmux_manager.find_window_by_id",
+                "ccgram.handlers.polling_coordinator.tmux_manager.find_window_by_id",
                 new_callable=AsyncMock,
             ) as mock_find,
             patch(
-                "ccgram.handlers.status_polling.tmux_manager.capture_pane",
+                "ccgram.handlers.polling_coordinator.tmux_manager.capture_pane",
                 new_callable=AsyncMock,
                 return_value="-- INSERT --\nline2\nline3\nline4",
             ),
@@ -432,13 +437,18 @@ class TestPollingAndCleanupIntegration:
                 "ccgram.tmux_manager.notify_vim_insert_seen",
                 wraps=notify_vim_insert_seen,
             ) as mock_notify,
-            patch("ccgram.handlers.status_polling._parse_with_pyte", return_value=None),
-            patch("ccgram.handlers.status_polling.get_provider_for_window") as mock_gpw,
             patch(
-                "ccgram.handlers.status_polling.get_interactive_window",
+                "ccgram.handlers.polling_coordinator._parse_with_pyte",
                 return_value=None,
             ),
-            patch("ccgram.handlers.status_polling._handle_no_status"),
+            patch(
+                "ccgram.handlers.polling_coordinator.get_provider_for_window"
+            ) as mock_gpw,
+            patch(
+                "ccgram.handlers.polling_coordinator.get_interactive_window",
+                return_value=None,
+            ),
+            patch("ccgram.handlers.polling_coordinator._handle_no_status"),
         ):
             from unittest.mock import MagicMock
 
@@ -451,7 +461,7 @@ class TestPollingAndCleanupIntegration:
             mock_provider.capabilities.uses_pane_title = False
             mock_gpw.return_value = mock_provider
 
-            from ccgram.handlers.status_polling import update_status_message
+            from ccgram.handlers.polling_coordinator import update_status_message
 
             await update_status_message(AsyncMock(), 1, "@9", thread_id=42)
         mock_notify.assert_not_called()
