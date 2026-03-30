@@ -379,12 +379,12 @@ The active delivery layer. Piggybacks on existing poll loop. Injects messages in
 
 Inter-agent messages shown in Telegram topics, silent by default, grouped. **Route all notifications through existing `message_queue.py`** (`enqueue_content_message`) — automatic FIFO ordering, merging, rate limiting, dead worker respawning. **Use `safe_send`/`safe_edit`** from `message_sender.py` with `disable_notification=True`. **Use `thread_router.get_thread_for_window()`** for O(1) window→topic resolution.
 
-- [ ] write tests for message notification formatting: sender info, subject, body preview
-- [ ] write tests for notification grouping: multiple messages merged into single Telegram message
-- [ ] write tests for silent delivery: notifications don't trigger push (disable_notification=True)
-- [ ] write tests for shell topic pending message display: show message in topic since send_keys is skipped
-- [ ] write tests for loop detection alert: inline keyboard `[Pause] [Allow 5 more]` in Telegram
-- [ ] implement `src/ccgram/handlers/msg_telegram.py`:
+- [x] write tests for message notification formatting: sender info, subject, body preview
+- [x] write tests for notification grouping: multiple messages merged into single Telegram message
+- [x] write tests for silent delivery: notifications don't trigger push (disable_notification=True)
+- [x] write tests for shell topic pending message display: show message in topic since send_keys is skipped
+- [x] write tests for loop detection alert: inline keyboard `[Pause] [Allow 5 more]` in Telegram
+- [x] implement `src/ccgram/handlers/msg_telegram.py`:
   - `async def notify_message_sent(bot, from_window, to_window, message)` — compact line in sender's topic: `→ @5 (auth-svc) [request] API contract query`
   - `async def notify_message_delivered(bot, from_window, to_window, message)` — compact line in recipient's topic: `← @0 (payment-svc) [request] API contract query`
   - `async def notify_reply_received(bot, original_msg, reply_msg)` — edit original sender-topic message in-place to show `✓ Reply received [View reply]`
@@ -393,8 +393,8 @@ Inter-agent messages shown in Telegram topics, silent by default, grouped. **Rou
   - `async def notify_loop_detected(bot, window_a, window_b)` — alert with `[Pause Messaging] [Allow 5 more]` keyboard
   - All notifications use `disable_notification=True` (silent)
   - Use existing `safe_send()` / `safe_edit()` helpers for entity formatting
-- [ ] wire notifications into broker delivery and CLI send paths
-- [ ] run `make fmt && make test && make lint` — must pass
+- [x] wire notifications into broker delivery and CLI send paths
+- [x] run `make fmt && make test && make lint` — must pass
 
 ### Task 7: Broadcast messaging
 

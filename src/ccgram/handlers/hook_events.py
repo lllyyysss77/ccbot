@@ -139,7 +139,7 @@ async def _handle_stop(event: HookEvent, bot: Bot) -> None:
     # Trigger immediate broker delivery for the idle window
     from .polling_coordinator import _run_broker_cycle
 
-    await _run_broker_cycle()
+    await _run_broker_cycle(bot)
 
 
 # Track active subagents per window: window_id -> {subagent_id -> name}

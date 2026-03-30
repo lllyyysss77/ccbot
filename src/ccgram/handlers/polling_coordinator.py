@@ -831,7 +831,7 @@ async def update_status_message(
 # ── Broker integration ────────────────────────────────────────────────────
 
 
-async def _run_broker_cycle() -> None:
+async def _run_broker_cycle(bot: Bot | None = None) -> None:
     """Run one broker delivery cycle (called from poll loop)."""
     from .msg_broker import broker_delivery_cycle
 
@@ -845,6 +845,7 @@ async def _run_broker_cycle() -> None:
         tmux_session=config.tmux_session_name,
         msg_rate_limit=config.msg_rate_limit,
         mailbox_dir=config.mailbox_dir,
+        bot=bot,
     )
 
 
@@ -876,7 +877,7 @@ async def _run_periodic_tasks(
 
     if now - timers["broker"] >= _BROKER_CYCLE_INTERVAL:
         timers["broker"] = now
-        await _run_broker_cycle()
+        await _run_broker_cycle(bot)
 
     if now - timers["sweep"] >= _SWEEP_INTERVAL:
         timers["sweep"] = now

@@ -17,8 +17,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+from telegram.error import TelegramError
 
 if TYPE_CHECKING:
+    from telegram import Bot
+
     from ..mailbox import Mailbox, Message
     from ..tmux_manager import TmuxManager
 
@@ -287,11 +290,15 @@ async def broker_delivery_cycle(
     tmux_session: str,
     msg_rate_limit: int,
     mailbox_dir: Path,
+    bot: "Bot | None" = None,
 ) -> int:
     """Run one broker delivery cycle.
 
     Scans all inboxes for pending messages, checks idle windows,
     and injects via send_keys. Returns the number of messages delivered.
+
+    When *bot* is provided, Telegram notifications are sent for
+    delivered messages, shell-pending messages, and loop detection.
     """
     from ..providers import get_provider_for_window
 
@@ -302,6 +309,7 @@ async def broker_delivery_cycle(
 
         provider = get_provider_for_window(window_id)
         if provider.capabilities.name == "shell":
+            await _notify_shell_pending(bot, mailbox, qualified_id)
             continue
 
         to_deliver = _collect_eligible(mailbox, qualified_id, msg_rate_limit)
@@ -323,5 +331,39 @@ async def broker_delivery_cycle(
                 window_id=qualified_id,
                 count=len(to_deliver),
             )
+            await _notify_delivered(bot, qualified_id, to_deliver)
 
     return delivered_count
+
+
+async def _notify_delivered(
+    bot: "Bot | None", to_window: str, messages: list["Message"]
+) -> None:
+    """Send Telegram notification for delivered messages (if bot available)."""
+    if bot is None:
+        return
+    from .msg_telegram import notify_messages_delivered
+
+    try:
+        await notify_messages_delivered(bot, to_window, messages)
+    except OSError, TelegramError:
+        logger.debug("Failed to send delivery notification", window=to_window)
+
+
+async def _notify_shell_pending(
+    bot: "Bot | None", mailbox: "Mailbox", qualified_id: str
+) -> None:
+    """Notify shell topics about pending messages (if bot available)."""
+    if bot is None:
+        return
+    from .msg_telegram import notify_pending_shell
+
+    pending = mailbox.inbox(qualified_id)
+    for msg in pending:
+        if msg.status == "pending":
+            try:
+                await notify_pending_shell(bot, qualified_id, msg)
+            except OSError, TelegramError:
+                logger.debug(
+                    "Failed to send shell pending notification", window=qualified_id
+                )
