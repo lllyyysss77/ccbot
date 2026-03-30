@@ -91,7 +91,7 @@ async def clear_topic_state(
         mb.sweep(qualified_id)
         mb.clear_inbox(qualified_id)
         clear_declared(qualified_id)
-        clear_delivery_state(window_id)
+        clear_delivery_state(qualified_id)
 
     # Clear interactive UI state (also deletes message from chat)
     await clear_interactive_msg(user_id, bot, thread_id)

@@ -148,7 +148,9 @@ def _save_spawn_log(log: dict[str, list[float]]) -> None:
     sdir = _spawns_dir()
     sdir.mkdir(parents=True, exist_ok=True)
     path = sdir / "rate_log.json"
-    path.write_text(json.dumps(log))
+    from ..utils import atomic_write_json
+
+    atomic_write_json(path, log)
 
 
 def check_spawn_rate(window_id: str, max_rate: int) -> bool:
@@ -388,7 +390,11 @@ async def _handle_spawn_callback(
     if data.startswith(CB_SPAWN_APPROVE):
         request_id = data[len(CB_SPAWN_APPROVE) :]
         bot = update.get_bot()
-        result = await handle_spawn_approval(request_id, bot)
+        try:
+            result = await handle_spawn_approval(request_id, bot)
+        except TelegramError:
+            logger.warning("Spawn approval failed for %s", request_id, exc_info=True)
+            result = None
         if result:
             text = f"\u2705 Spawned: {result.window_name} ({result.window_id})"
         else:

@@ -348,7 +348,7 @@ class Mailbox:
             else [
                 self.base_dir / d.name
                 for d in os.scandir(str(self.base_dir))
-                if d.is_dir() and d.name != "tmp"
+                if d.is_dir() and d.name not in ("tmp", "spawns")
             ]
         )
         removed = sum(self._sweep_dir(d) for d in dirs if d.is_dir())
@@ -445,7 +445,7 @@ class Mailbox:
             return removed
 
         for entry in os.scandir(str(self.base_dir)):
-            if not entry.is_dir() or entry.name == "tmp":
+            if not entry.is_dir() or entry.name in ("tmp", "spawns"):
                 continue
             qualified_id = _unsanitize_dir_name(entry.name)
             if qualified_id in live_ids:
