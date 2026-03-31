@@ -23,6 +23,8 @@ This module owns all knowledge that no other module should have:
 - **Startup grace period** — suppress status during window initialization, `has_seen_status` flag
 - **Unbound window TTL** — track how long a window has been unbound, auto-kill after configurable timeout
 - **Poll state structures** — `WindowPollState` (per-window) and `TopicPollState` (per-topic) own all mutable polling state; no module-level dicts leak outside
+- **Threshold ownership** — all threshold comparisons (`>= _MAX_PROBE_FAILURES`, `>= _STARTUP_TIMEOUT`, etc.) are encapsulated inside strategy methods; the coordinator delegates decisions rather than evaluating thresholds inline
+- **Cross-strategy boundary** — `TopicLifecycleStrategy` accesses `TerminalStatusStrategy` only through public methods (`clear_probe_failures()`, `clear_seen_status()`, `reset_all_probe_failures()`, `reset_all_seen_status()`, `clear_unbound_timer()`); no direct `._states` access
 
 ## Subdomain Classification
 
@@ -86,12 +88,19 @@ This module owns all knowledge that no other module should have:
 - **What is shared**: Window ID for passive monitoring
 - **Contract definition**: `check_passive_shell_output(bot, window_id, user_id, thread_id)`, `clear_shell_monitor_state(window_id)`
 
-### → Cleanup (drives)
+### → Topic State Registry (drives)
 
-- **Direction**: Polling Subsystem drives Cleanup
+- **Direction**: Polling Subsystem drives Topic State Registry (via cleanup)
 - **Contract type**: Contract (lifecycle event)
 - **What is shared**: Topic identity for state cleanup
-- **Contract definition**: `clear_topic_state(bot, user_id, thread_id, window_id, ...)`
+- **Contract definition**: `topic_state.clear_all(user_id, thread_id, window_id, qualified_id)` — replaces direct `clear_topic_state()` call; cleanup.py orchestrates the registry
+
+### → Message Broker (drives)
+
+- **Direction**: Polling Subsystem drives Message Broker
+- **Contract type**: Contract (delivery cycle)
+- **What is shared**: Window states for message delivery
+- **Contract definition**: `broker_delivery_cycle(bot, window_states, mailbox, tmux)` — called from poll loop
 
 ## Change Vectors
 

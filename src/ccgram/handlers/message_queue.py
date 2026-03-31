@@ -184,7 +184,7 @@ _queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
 
 # Status message tracking: (user_id, thread_id_or_0) -> (message_id, window_id, last_text)
-_status_msg_info: dict[tuple[int, int], tuple[int, str, str]] = {}
+_status_msg_info: dict[tuple[int, int], tuple[int, str, str, int]] = {}
 
 # Active tool batches: (user_id, thread_id_or_0) -> ToolBatch
 _active_batches: dict[tuple[int, int], ToolBatch] = {}
@@ -665,10 +665,7 @@ async def _convert_status_to_content(
     if not info:
         return None
 
-    thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
-
-    msg_id, stored_wid, _ = info
+    msg_id, stored_wid, _, chat_id = info
     if stored_wid != window_id:
         # Different window, just delete the old status
         with contextlib.suppress(TelegramError):
@@ -707,7 +704,6 @@ async def _process_status_update_task(
     """Process a status update task."""
     window_id = task.window_id or ""
     thread_id = task.thread_id or 0
-    chat_id = thread_router.resolve_chat_id(user_id, task.thread_id)
     skey = (user_id, thread_id)
     # task.text must be pre-formatted (display_label from StatusUpdate, not raw terminal text)
     status_text = task.text or ""
@@ -720,7 +716,7 @@ async def _process_status_update_task(
     current_info = _status_msg_info.get(skey)
 
     if current_info:
-        msg_id, stored_wid, last_text = current_info
+        msg_id, stored_wid, last_text, stored_chat_id = current_info
 
         if stored_wid != window_id:
             # Window changed - delete old and send new
@@ -737,13 +733,18 @@ async def _process_status_update_task(
             keyboard = build_status_keyboard(window_id, history=history)
             success = await edit_with_fallback(
                 bot,
-                chat_id,
+                stored_chat_id,
                 msg_id,
                 status_text,
                 reply_markup=keyboard,
             )
             if success:
-                _status_msg_info[skey] = (msg_id, window_id, status_text)
+                _status_msg_info[skey] = (
+                    msg_id,
+                    window_id,
+                    status_text,
+                    stored_chat_id,
+                )
             else:
                 # Edit failed (message deleted, rate limit, etc.)
                 # Clear tracking and let the next poll cycle recreate it
@@ -775,15 +776,15 @@ async def _do_send_status_message(
     # Guard: if a status message already exists, edit it instead of sending new
     existing = _status_msg_info.get(skey)
     if existing:
-        msg_id, stored_wid, last_text = existing
+        msg_id, stored_wid, last_text, stored_chat_id = existing
         if stored_wid == window_id and text == last_text:
             return  # identical, nothing to do
         if stored_wid == window_id:
             success = await edit_with_fallback(
-                bot, chat_id, msg_id, text, reply_markup=keyboard
+                bot, stored_chat_id, msg_id, text, reply_markup=keyboard
             )
             if success:
-                _status_msg_info[skey] = (msg_id, window_id, text)
+                _status_msg_info[skey] = (msg_id, window_id, text, stored_chat_id)
                 return
             # Edit failed — clear tracking, fall through to send new
             _status_msg_info.pop(skey, None)
@@ -799,7 +800,7 @@ async def _do_send_status_message(
         **_send_kwargs(thread_id),  # type: ignore[arg-type]
     )
     if sent:
-        _status_msg_info[skey] = (sent.message_id, window_id, text)
+        _status_msg_info[skey] = (sent.message_id, window_id, text, chat_id)
 
 
 async def _do_clear_status_message(
@@ -811,9 +812,7 @@ async def _do_clear_status_message(
     skey = (user_id, thread_id_or_0)
     info = _status_msg_info.pop(skey, None)
     if info:
-        msg_id = info[0]
-        thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-        chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+        msg_id, _, _, chat_id = info
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except TelegramError as e:

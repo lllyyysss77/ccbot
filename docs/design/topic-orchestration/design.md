@@ -9,6 +9,7 @@
 - Construct topic names from window metadata (window_name || cwd basename || window_id)
 - Enumerate target chats for topic creation (active bindings → preserved chat IDs → config.group_id fallback)
 - Bind newly created topics to the appropriate user
+- Expose `collect_target_chats()` and `create_topic_in_chat()` as public functions for reuse by spawn approval flow
 
 ## Encapsulated Knowledge
 
@@ -76,6 +77,15 @@ This module owns all knowledge that no other module should have:
 - **Contract type**: Functional (delegation)
 - **What is shared**: Orphaned window list
 - **Contract definition**: `_adopt_orphaned_windows(bot, orphaned_windows)` — adopted from existing sync module
+
+### ← Message Spawn (depended on by)
+
+- **Direction**: Message Spawn depends on Topic Orchestration
+- **Contract type**: Contract (public functions)
+- **What is shared**: Chat enumeration and topic creation for spawn approval
+- **Contract definition**:
+  - `collect_target_chats(bot) -> list[tuple[int, int]]` — enumerate chats for topic creation (public)
+  - `create_topic_in_chat(bot, chat_id, user_id, window_name) -> int | None` — create topic in chat (public)
 
 ## Change Vectors
 

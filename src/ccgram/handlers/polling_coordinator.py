@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING
 from telegram import Bot
 
 if TYPE_CHECKING:
-    from ..screen_buffer import ScreenBuffer
     from ..tmux_manager import TmuxWindow
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, TelegramError
@@ -102,11 +101,6 @@ def _get_topic_state(user_id: int, thread_id: int) -> TopicPollState:
     return lifecycle_strategy.get_state(user_id, thread_id)
 
 
-def _get_screen_buffer(window_id: str, columns: int, rows: int) -> "ScreenBuffer":
-    """Get or create a ScreenBuffer for a window, resizing if needed."""
-    return terminal_strategy.get_screen_buffer(window_id, columns, rows)
-
-
 # ── Typing throttle ─────────────────────────────────────────────────────
 
 
@@ -129,11 +123,6 @@ async def _send_typing_throttled(bot: Bot, user_id: int, thread_id: int | None) 
 
 
 # ── RC state / pyte parsing ─────────────────────────────────────────────
-
-
-def _update_rc_state(ws: WindowPollState, rc_detected: bool) -> None:
-    """Update Remote Control state with 3s debounce on removal."""
-    terminal_strategy.update_rc_state(ws, rc_detected)
 
 
 def _parse_with_pyte(
@@ -559,7 +548,13 @@ async def _handle_dead_window_notification(
                 or "topic_id_invalid" in probe_err.message.lower()
             ):
                 terminal_strategy.reset_probe_failures(wid)
-                await clear_topic_state(user_id, thread_id, bot, window_id=wid)
+                await clear_topic_state(
+                    user_id,
+                    thread_id,
+                    bot,
+                    window_id=wid,
+                    window_dead=True,
+                )
                 thread_router.unbind_thread(user_id, thread_id)
                 logger.info(
                     "Topic deleted: unbound window %s for thread %d, user %d",
@@ -622,7 +617,13 @@ async def _close_expired_topic(bot: Bot, user_id: int, thread_id: int) -> None:
             thread_id,
             user_id,
         )
-        await clear_topic_state(user_id, thread_id, bot=bot, window_id=window_id)
+        await clear_topic_state(
+            user_id,
+            thread_id,
+            bot=bot,
+            window_id=window_id,
+            window_dead=True,
+        )
         thread_router.unbind_thread(user_id, thread_id)
 
 
@@ -665,6 +666,15 @@ async def _kill_expired_unbound(now: float, timeout: float) -> None:
         clear_vim_state(wid)
         await tmux_manager.kill_window(wid)
         clear_window_poll_state(wid)
+
+        from ..config import config
+        from ..window_resolver import is_foreign_window
+        from .topic_state_registry import topic_state
+
+        qualified_id = (
+            wid if is_foreign_window(wid) else f"{config.tmux_session_name}:{wid}"
+        )
+        topic_state.clear_qualified(qualified_id)
         logger.info("Auto-killed unbound window %s (TTL expired)", wid)
 
 

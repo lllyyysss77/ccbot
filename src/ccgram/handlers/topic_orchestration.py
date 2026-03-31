@@ -28,7 +28,6 @@ from ..session import session_manager
 from ..session_monitor import NewWindowEvent
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
-from .topic_state_registry import topic_state
 
 logger = structlog.get_logger()
 
@@ -38,9 +37,14 @@ _topic_create_retry_until: dict[int, float] = {}
 _TOPIC_CREATE_RETRY_BUFFER_SECONDS = 1
 
 
-@topic_state.register("chat")
 def clear_topic_create_retry(chat_id: int, _thread_id: int = 0) -> None:
-    """Clear topic creation retry backoff for this chat (called on topic cleanup)."""
+    """Clear topic creation retry backoff for this chat.
+
+    NOT registered in TopicStateRegistry — the backoff is self-managing:
+    entries expire via the time check in create_topic_in_chat() and are
+    cleared on successful topic creation.  Clearing on every topic teardown
+    would bypass Telegram's flood-control gate prematurely.
+    """
     _topic_create_retry_until.pop(chat_id, None)
 
 

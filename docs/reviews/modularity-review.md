@@ -1,239 +1,226 @@
 # Modularity Review
 
-**Scope**: Full codebase — `src/ccgram/` (~24,800 LOC across 50+ Python modules)
-**Date**: 2026-03-28
+**Scope**: Full codebase — `src/ccgram/` (~28,500 LOC across 84 Python modules)
+**Date**: 2026-03-30
+**Context**: Third review. Previous reviews (2026-03-28, 2026-03-29) resolved 4 of 5 original issues. This review covers the new inter-agent messaging feature and reassesses persistent concerns.
 
 ## Executive Summary
 
-ccgram bridges Telegram and tmux to manage AI coding agents remotely — each Forum topic maps 1:1 to a tmux window running an agent CLI. The system's provider protocol and hook-based event pipeline are well-designed integrations that demonstrate strong [modularity](https://coupling.dev/posts/core-concepts/modularity/). However, three modules — `status_polling.py`, `session.py`, and `bot.py` — have accumulated [model-level knowledge](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) across 5+ conceptual domains each, creating rigidity bottlenecks in the system's most [volatile](https://coupling.dev/posts/dimensions-of-coupling/volatility/) areas. A fourth issue — provider-specific logic leaking outside the provider abstraction — undermines an otherwise clean design pattern.
+ccgram bridges Telegram Forum topics to tmux windows running AI coding agents (Claude Code, Codex, Gemini, Shell). The previous modularity refactoring achieved strong results: `bot.py` was halved, polling was decomposed into strategies, the provider protocol was cleaned up, and the callback dispatch was replaced with a self-registering registry. Three concerns persist — `SessionManager` remains a god object (1,526 lines, 50 methods, 24 consumers), per-topic state is fragmented across 14+ modules with inconsistent key types, and the new inter-agent messaging feature introduces [intrusive coupling](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) via private-interface imports across 5 modules. The messaging subsystem's `mailbox.py` core is excellently isolated (zero internal imports), but the handler-layer modules (`msg_broker`, `msg_spawn`) bypass encapsulation boundaries to share mutable state and private functions.
 
-## Coupling Overview
+## Coupling Overview Table
 
-| Integration                     | [Strength](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | [Distance](https://coupling.dev/posts/dimensions-of-coupling/distance/) | [Volatility](https://coupling.dev/posts/dimensions-of-coupling/volatility/) | [Balanced?](https://coupling.dev/posts/core-concepts/balance/) |
-| ------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Hook System -> Monitoring       | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | High (separate processes)                                               | Low                                                                         | Yes                                                            |
-| Provider Protocol -> Consumers  | [Model](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)      | Low (same package)                                                      | Low-Medium                                                                  | Yes                                                            |
-| Status Polling -> 6+ domains    | [Model](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)      | Medium (conceptual)                                                     | High                                                                        | **No**                                                         |
-| SessionManager -> 24 consumers  | [Functional](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) | Low (same package)                                                      | High                                                                        | **No**                                                         |
-| bot.py -> 30+ handlers          | [Functional](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) | Low (same package)                                                      | High                                                                        | **No**                                                         |
-| Bot layer -> Codex internals    | [Model](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)      | Low (same package)                                                      | Medium                                                                      | **No**                                                         |
-| Shell prompt -> capture/polling | [Model](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)      | Low (same package)                                                      | High                                                                        | Borderline                                                     |
+| Integration                                                   | [Strength](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | [Distance](https://coupling.dev/posts/dimensions-of-coupling/distance/) | [Volatility](https://coupling.dev/posts/dimensions-of-coupling/volatility/) | [Balanced?](https://coupling.dev/posts/core-concepts/balance/) |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Hook System → Session Monitor                                 | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | High (separate processes, JSONL files)                                  | Low                                                                         | Yes                                                            |
+| Provider Protocol → Consumers                                 | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | Low (same package)                                                      | Medium                                                                      | Yes                                                            |
+| LLM / Whisper → Consumers                                     | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | Low (same package)                                                      | Low                                                                         | Yes                                                            |
+| Callback Registry → Handlers                                  | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | Low (same package)                                                      | Low                                                                         | Yes                                                            |
+| ThreadRouter → Consumers                                      | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | Low (same package)                                                      | Low                                                                         | Yes                                                            |
+| Shell PromptMatch → Consumers                                 | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | Low (same package)                                                      | Low                                                                         | Yes                                                            |
+| `mailbox.py` Core → Consumers                                 | [Contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)   | Low (same package)                                                      | Medium                                                                      | Yes                                                            |
+| Polling Strategies → Coordinator                              | [Model](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)      | Low (same package)                                                      | Medium                                                                      | Borderline                                                     |
+| `msg_broker` → `mailbox` internals                            | [Intrusive](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)  | Low (same package)                                                      | High                                                                        | **No**                                                         |
+| `msg_broker` + `msg_spawn` → `_pending_requests`              | [Intrusive](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)  | Low (same package)                                                      | High                                                                        | **No**                                                         |
+| `msg_spawn` → `topic_orchestration` / `msg_telegram` privates | [Intrusive](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)  | Low (same package)                                                      | High                                                                        | **No**                                                         |
+| `msg_cmd` → `state.json` schema                               | [Intrusive](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)  | Medium (CLI process vs bot process)                                     | High                                                                        | **No**                                                         |
+| `SessionManager` → 24 consumers                               | [Functional](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) | Low (same package)                                                      | High                                                                        | **No**                                                         |
+| `cleanup.py` → 14 modules                                     | [Intrusive](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)  | Low (same package)                                                      | High                                                                        | **No**                                                         |
+| `TopicLifecycle` → `Terminal._states`                         | [Intrusive](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/)  | Low (same file)                                                         | Medium                                                                      | Borderline                                                     |
 
----
+## Issue: Inter-Agent Messaging Private-Interface Coupling
 
-## Issue: Status Polling Knowledge Sprawl
-
-**Integration**: `status_polling.py` -> providers, session state, tmux, terminal parsing, shell subsystem, interactive UI, hook events, message queue, topic emoji, Telegram Bot API
-**Severity**: CRITICAL
-
-### Knowledge Leakage
-
-`status_polling.py` (1,339 lines) holds [model-level knowledge](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) of nearly every domain in the system. It doesn't just call other subsystems through their public APIs — it understands their internal semantics:
-
-- It knows that shell providers need `setup_shell_prompt()` called on provider transitions (lazy-imports `providers.shell.setup_shell_prompt` at lines 1143 and 1186).
-- It interprets `WindowState` fields directly (`transcript_path`, `session_id`, `cwd`, `provider_name`) rather than operating through a focused interface.
-- It maintains parallel state dictionaries (`WindowPollState`, `TopicPollState`, `_dead_notified`, `_pane_alert_hashes`) that extend and mirror session state — 7 module-level mutable state structures in total.
-- It directly calls `session_manager.register_hookless_session()` for transcript discovery — a responsibility that belongs in the session/monitoring layer.
-- It checks `provider_name` string values directly (e.g., `if provider_name in ("codex", "gemini", "shell")` at line 527) instead of querying provider capabilities.
-
-### Complexity Impact
-
-The module crosses terminal, session, UI, shell, and provider domains — at least 5 conceptual areas. While the physical [distance](https://coupling.dev/posts/dimensions-of-coupling/distance/) is low (same package), the conceptual distance is medium: a developer modifying shell prompt behavior must also understand topic lifecycle timers, pane scanning, and RC debounce logic to safely change this file. The cognitive load exceeds what any single developer can hold in working memory when debugging a polling issue.
-
-### Cascading Changes
-
-Concrete scenarios that force changes to this 1,339-line file:
-
-- **Adding a new provider capability** (e.g., a provider that uses a different terminal status detection method) requires modifying the polling strategy in `update_status_message()` and `_handle_no_status()`.
-- **Changing interactive UI detection** requires updating `_parse_with_pyte()`, `_check_interactive_only()`, and the multi-pane scanning logic.
-- **Modifying shell prompt markers** requires updating the idle detection logic that calls `has_prompt_marker()` and `setup_shell_prompt()`.
-- **Adding a new topic lifecycle state** (beyond active/idle/done/dead) requires changes in `_handle_no_status()`, `_start_autoclose_timer()`, and `_check_autoclose_timers()`.
-
-Because the module is the system's most changed file (nearly every feature addition touches it), these cascading changes compound: any feature PR is likely to conflict with other in-flight work.
-
-### Recommended Improvement
-
-Decompose into focused polling strategies, each owning its domain knowledge:
-
-1. **Terminal status strategy** — provider status parsing, pyte screen buffering, RC state, spinner detection
-2. **Interactive UI strategy** — interactive prompt scanning, multi-pane alerts, interactive mode coordination
-3. **Topic lifecycle strategy** — autoclose timers, dead window detection, topic existence probing, unbound window TTL
-4. **Shell relay strategy** — passive shell output monitoring (already partially extracted to `shell_capture.py`)
-
-A thin polling coordinator (< 200 lines) iterates bindings and delegates to each strategy. Each strategy owns its module-level state and presents a single `poll(window_id, ...) -> StatusResult` interface.
-
-**Trade-off**: This introduces 4-5 new modules and requires defining the interfaces between them. The cost is justified because the current file is a [change amplifier](https://coupling.dev/posts/core-concepts/complexity/) — the decomposition converts one 1,339-line bottleneck into independently modifiable units.
-
----
-
-## Issue: SessionManager State Accumulation
-
-**Integration**: `session.py` (SessionManager) -> 24 consumer modules
-**Severity**: CRITICAL
+**Integration**: `msg_broker.py` / `msg_spawn.py` / `msg_cmd.py` → `mailbox.py` / `spawn_request.py` / `topic_orchestration.py` internals
+**Severity**: Significant
 
 ### Knowledge Leakage
 
-`SessionManager` (1,621 lines, 40+ public methods) manages 6 unrelated data concerns through a single class:
+The messaging feature's handler layer reaches across module boundaries via private interfaces in five specific ways:
 
-1. **Thread/window bindings** — `thread_bindings`, `window_display_names`, `_window_to_thread` (routing core)
-2. **Window state** — `window_states` with `WindowState` dataclass (session tracking)
-3. **User read offsets** — `user_window_offsets` (unread detection)
-4. **Group chat mappings** — `group_chat_ids` (multi-group routing)
-5. **User preferences** — notification modes, approval modes, batch modes (embedded in `WindowState`)
-6. **Directory favorites** — `user_dir_favorites` (UI preference)
+1. **`msg_broker.py`** imports `_sanitize_dir_name` and `_validate_no_traversal` from `mailbox.py` — private functions that encode the mailbox's internal directory structure (`inbox_dir / "tmp" / "deliver-{msg_id}.txt"`). The broker re-implements mailbox path construction logic rather than calling a public API.
 
-All 24 consumers import the `session_manager` singleton and gain access to the full 40+ method API surface. A handler that only needs `resolve_chat_id()` also has implicit access to `cycle_batch_mode()`, `register_hookless_session()`, and directory favorites manipulation. This creates [functional coupling](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) at maximum surface area.
+2. **`msg_broker.py`** and **`msg_spawn.py`** both import `_pending_requests` — a private `dict` from `spawn_request.py`. Three modules co-own a single in-process mutable dict with no accessor protocol. Any cache structure change requires synchronized edits across all three files.
+
+3. **`msg_spawn.py`** imports `_resolve_topic` (private) from `msg_telegram.py`, and `_collect_target_chats` / `_create_topic_in_chat` (private) from `topic_orchestration.py`. These are implementation details of sibling handler modules, not stable contracts.
+
+4. **`msg_cmd.py`**'s `_load_window_states()` reads `state.json` directly and hardcodes the field names `window_states`, `cwd`, `window_name`, `provider_name`, `external` — the private serialization schema of `SessionManager`. This exists because the CLI cannot instantiate the bot, but it creates a silent [contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) that breaks if `WindowState.to_dict()` is ever changed.
+
+5. **`msg_broker` ↔ `msg_telegram`** form a bidirectional dependency cycle. Both defer their cross-imports to function scope to avoid circular import errors, but the logical cycle means neither module can be tested or reasoned about independently.
 
 ### Complexity Impact
 
-[Low cohesion](https://coupling.dev/posts/core-concepts/balance/) makes the class hard to reason about. A developer reading `message_queue.py` to understand message delivery must follow `session_manager.get_window_state()` into a 1,621-line class that also handles directory favorites, audit operations, and hookless session registration. The class has become a state attractor — every new feature that needs persistent per-window or per-user state adds fields and methods here because it's the only persistent state abstraction available.
+A developer modifying `mailbox.py`'s internal directory structure (e.g., changing the temporary delivery path) must also update `msg_broker.py`, which silently duplicates that knowledge. The `_pending_requests` shared dict is particularly dangerous: three modules assume they can `.pop()` from it concurrently, with no locking or ownership protocol. The [complexity](https://coupling.dev/posts/core-concepts/complexity/) here exceeds what a developer can hold in working memory — the implicit contracts between these five modules are invisible at the function signature level.
 
 ### Cascading Changes
 
-- **Adding a new persistent setting** (e.g., a per-window "auto-screenshot" preference) requires adding a field to `WindowState`, updating `to_dict()`/`from_dict()` serialization, adding getter/setter methods to `SessionManager`, and modifying any handler that needs the setting.
-- **Changing the persistence format** (e.g., migrating from JSON to SQLite) would require rewriting the entire `SessionManager` class, affecting all 24 consumers.
-- **Adding a new binding dimension** (e.g., per-pane bindings for agent teams) would require restructuring `thread_bindings` and `_window_to_thread`, affecting every module that iterates bindings.
+- **Renaming `_pending_requests` or changing its value type** in `spawn_request.py` forces changes in both `msg_broker.py` and `msg_spawn.py`.
+- **Changing `state.json` field names** in `session.py` silently breaks `msg_cmd.py`'s peer discovery — no import error, no type error, just wrong runtime behavior.
+- **Refactoring `topic_orchestration.py`'s internal `_create_topic_in_chat`** breaks `msg_spawn.py`'s spawn-approval flow.
+- **Restructuring `mailbox.py`'s directory layout** requires updating `msg_broker.py`'s `write_delivery_file` function.
 
 ### Recommended Improvement
 
-Define narrow Protocol interfaces that consumers type-hint against:
+To reduce [integration strength](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) from intrusive to contract:
 
-```python
-class ThreadRouter(Protocol):
-    def resolve_window_for_thread(self, user_id: int, thread_id: int) -> str | None: ...
-    def bind_thread(self, user_id: int, thread_id: int, window_id: str) -> None: ...
-    def unbind_thread(self, user_id: int, thread_id: int) -> None: ...
+1. **Expose a `create_delivery_path(msg_id)` method on `Mailbox`** or move `write_delivery_file` into `mailbox.py` entirely. The broker should call a public method, not re-implement internal path logic.
+2. **Replace `_pending_requests` with accessor functions** in `spawn_request.py`: `get_pending(request_id) -> SpawnRequest | None`, `pop_pending(request_id) -> SpawnRequest | None`, `iter_pending() -> Iterator`. The dict remains private; consumers go through a stable API.
+3. **Promote `_resolve_topic`, `_collect_target_chats`, `_create_topic_in_chat` to public functions** (drop the underscore prefix) with stable signatures. These are used across module boundaries and should be treated as published interfaces.
+4. **Add a `load_window_info()` function to `msg_discovery.py`** that reads `state.json` via `SessionManager.to_dict()` serialization contract — or better, define a `WindowInfoSnapshot` export on `session.py` that `msg_cmd.py` can import for the CLI path. This makes the schema dependency explicit.
+5. **Break the `msg_broker` ↔ `msg_telegram` cycle** by extracting the shared `delivery_strategy` into a third module (e.g., `msg_delivery.py`) that both import without cross-referencing each other.
 
-class WindowStateStore(Protocol):
-    def get_window_state(self, window_id: str) -> WindowState: ...
-    def get_display_name(self, window_id: str) -> str: ...
-```
+Trade-off: five small API additions across three modules. The cost is low — most changes are promoting existing private functions to public — and the benefit is that each module's public interface becomes the single source of truth for its behavior.
 
-`SessionManager` implements all protocols. Consumers import and depend on the narrow protocol, not the full class. No physical decomposition needed — just interface segregation.
+## Issue: SessionManager God Object
 
-**Trade-off**: Adds Protocol definitions and changes import patterns across 24 files. This is a moderate refactoring effort, but it prevents the state attractor pattern from accelerating — each new consumer explicitly declares which slice of state it needs, making dependency audits trivial.
-
----
-
-## Issue: bot.py Dispatch Monolith
-
-**Integration**: `bot.py` -> 30+ handler modules
-**Severity**: CRITICAL
+**Integration**: `SessionManager` (1,526 lines, ~50 public methods) → 24 consumer modules
+**Severity**: Significant
 
 ### Knowledge Leakage
 
-`bot.py` (2,018 lines) imports from 41 modules and serves as a manual wiring hub. It has accumulated three distinct responsibilities:
+`SessionManager` bundles six distinct concerns into a single class, exposing all of them through one import. Every consumer — whether it needs to send a keystroke, check a user preference, or resolve a session — gets the full 50-method API surface. The concerns are:
 
-1. **Telegram handler registration** — mapping commands and callbacks to handler functions via python-telegram-bot's `Application.add_handler()` (lines 1927-2016).
-2. **Callback dispatch** — a cascading prefix-match chain routing callback queries to the correct handler based on `CB_*` string prefixes (the `callback_handler()` function).
-3. **Orchestration logic** — provider menu management (LRU caches for scoped menus, lines 209-408), command failure probing (transcript inspection after sending commands, lines 913-983), auto-topic creation for new windows (lines 1665-1713), and lifecycle management (post_init/post_shutdown, lines 1749-1908).
+1. **Window state store**: `window_states` dict, CRUD operations (8 methods)
+2. **Per-window mode configuration**: approval, notification, batch mode getters/setters/cyclers (9 methods)
+3. **State persistence and lifecycle**: startup resolution, shutdown flush, pruning (4 methods)
+4. **Session I/O**: transcript resolution, `send_to_window`, `get_recent_messages` (3 methods)
+5. **User favorites/MRU/offsets**: starred directories, most-recently-used, read positions (6 methods)
+6. **Thread routing pass-through**: 9 methods that delegate directly to `thread_router` with zero added logic
 
-The callback dispatch is [functionally coupled](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) to every handler: adding a new callback requires importing the handler, importing its prefix constant, adding a prefix match case, and (often) registering a new command handler — a 4-step ceremony in a 2,000-line file.
+The `protocols.py` file that was intended to provide [interface segregation](https://coupling.dev/posts/core-concepts/modularity/) no longer exists — it was removed after the previous refactoring. All 24 consumers import the concrete `session_manager` singleton directly with no abstraction boundary.
 
 ### Complexity Impact
 
-All 30+ handler imports execute at module load time. An import error in any handler prevents the entire bot from starting. The file is a merge conflict hotspot — any two features adding handlers will conflict in the import section and in `callback_handler()`.
+When a developer adds a new per-window setting (e.g., a notification preference), the change lands in the same 1,526-line file alongside unrelated concerns like tmux keystroke sending and user MRU tracking. The [cognitive load](https://coupling.dev/posts/core-concepts/complexity/) of modifying `SessionManager` is high because any of its 50 methods might interact with any of its 8 internal data structures. The 24-consumer fan-in means that any signature change, even to a rarely-used method, must be checked against a quarter of the codebase.
 
 ### Cascading Changes
 
-- **Adding a new callback handler** requires 4 changes in bot.py (import handler, import prefix, add match case, register command).
-- **Renaming a callback prefix** requires changing both `callback_data.py` and the match case in bot.py.
-- **Adding a new bot command** requires adding a `CommandHandler` registration in `create_bot()`.
-
-Each new feature amplifies the file's size and import surface.
+- **Adding a new preference type** (getter + setter + cycler) adds 3 methods to an already-overloaded class and may require persistence format changes in `to_dict`/`from_dict`.
+- **Changing `send_to_window`'s behavior** (e.g., adding rate limiting) affects 9 callers that import `session_manager` solely for this method.
+- **Renaming `window_states`** cascades to 4 modules that access the raw dict directly (`polling_coordinator`, `sync_command`, `msg_spawn`, `providers/__init__`).
 
 ### Recommended Improvement
 
-Extract a callback dispatch registry where handlers self-register:
+Interface segregation without physical decomposition — the same recommendation from review #1, now with a clearer path since `ThreadRouter` proves the pattern works:
 
-```python
-# In each handler module
-@callback_registry.register(CB_DIR_SELECT, CB_DIR_BACK, CB_DIR_HOME)
-async def handle_directory_callback(update, context): ...
-```
+1. **Drop the 9 pass-through delegation methods** (`bind_thread`, `unbind_thread`, `get_window_for_thread`, etc.). Every caller already has access to `thread_router` — the delegation exists only for backward compatibility that a feature branch doesn't need.
+2. **Extract `UserPreferences`** (starred, MRU, offsets — 6 methods) into a small standalone class, following the `ThreadRouter` pattern. Only 2 modules use these methods (`directory_browser`, `directory_callbacks`).
+3. **Define narrow `Protocol` interfaces** for the remaining concerns: `WindowStateStore` (8 methods), `SessionIO` (3 methods), `WindowModeConfig` (9 methods). Consumers type-annotate against the protocol they actually need, not the full `SessionManager`.
 
-`callback_handler()` becomes a 10-line loop over the registry. Handler modules self-register their prefixes, eliminating the import ceremony in bot.py. The orchestration logic (provider menus, command probing, auto-topic creation) should move to dedicated modules, reducing bot.py to ~400 lines of pure registration and lifecycle code.
+Trade-off: the physical class stays unified (avoiding serialization headaches), but the logical API is partitioned. Removing 9 pass-through methods and extracting `UserPreferences` immediately drops the public method count from ~50 to ~35 and removes 2 consumers from `SessionManager`'s fan-in.
 
-**Trade-off**: A registry pattern adds one level of indirection. The benefit is that handler modules become self-contained — adding a new handler no longer requires touching bot.py.
+## Issue: Fragmented Per-Topic State with Intrusive Cleanup
 
----
-
-## Issue: Provider Abstraction Leakage
-
-**Integration**: `bot.py`, `codex_status.py` -> Codex provider internals
-**Severity**: SIGNIFICANT
+**Integration**: `cleanup.py` → 14 stateful modules via lazy imports
+**Severity**: Significant
 
 ### Knowledge Leakage
 
-The provider protocol (`AgentProvider` + `ProviderCapabilities`) is a well-designed [contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) — providers implement a uniform interface and consumers query capabilities. However, Codex-specific logic has leaked outside the provider boundary:
+Per-topic runtime state is scattered across 14+ modules as module-level mutable dicts, each with its own key type. `cleanup.py` acts as a centralized teardown orchestrator that must know about every stateful module's internal cleanup function. It currently contains 14 lazy imports to avoid circular dependencies — each one is an [intrusive coupling](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) point where `cleanup.py` reaches into a module's private state management.
 
-- `codex_status.py` (237 lines, top-level module) contains Codex-specific JSONL transcript parsing to build status snapshots. It is only used by `bot.py`.
-- `bot.py` has `_codex_status_probe_offset()` and `_maybe_send_codex_status_snapshot()` (lines 913-983) — functions that check `provider.capabilities.name == "codex"` to activate a special code path for `/status` and `/stats` commands.
-- `interactive_prompt_formatter.py` (245 lines, top-level module) formats Codex-specific interactive prompts. It is only imported by `providers/codex.py`.
+The key type inconsistency makes the knowledge leakage worse:
 
-This means the orchestration layer (bot.py) has [model-level knowledge](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) of a specific provider's transcript format and command semantics — exactly the knowledge the provider protocol was designed to encapsulate.
+| Key Type                      | Used By                                                            |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `(user_id, thread_id)`        | message_queue, interactive_ui, command_history, polling lifecycle  |
+| `(chat_id, thread_id)`        | topic_emoji, shell_commands                                        |
+| `window_id` (bare string)     | polling terminal, subagents, shell_capture, pane_alerts, vim_state |
+| `qualified_id` (`session:@N`) | mailbox, delivery, spawn, declared                                 |
+
+`cleanup.py` must translate between all four schemes on every call, using `thread_router.resolve_chat_id()` to bridge the `user_id` ↔ `chat_id` gap. If the thread binding is deleted before cleanup resolves `chat_id`, the `(chat_id, thread_id)` state is silently orphaned.
 
 ### Complexity Impact
 
-The provider protocol promises that consumers interact with all providers uniformly. The Codex-specific paths in bot.py break this promise: a developer adding a new provider must now audit bot.py for hard-coded provider name checks to understand the full behavioral surface. The `codex_status.py` module existing at the top level (alongside provider-agnostic modules) is misleading — it looks like core infrastructure but is actually a single-provider helper.
+Every new feature that adds per-topic mutable state must also add a lazy import and cleanup call to `cleanup.py` — or the state leaks. This is an implicit contract with no enforcement mechanism. The 14 lazy imports are evidence of at least 4 structural dependency cycles in the handlers package. A developer adding a simple per-window counter must understand the cleanup system, choose the correct key type, and wire up the teardown — exceeding the [cognitive capacity](https://coupling.dev/posts/core-concepts/complexity/) required for what should be a local change.
+
+Three active state leaks remain unaddressed:
+
+| Leaked State                            | Module              | Risk                                                            |
+| --------------------------------------- | ------------------- | --------------------------------------------------------------- |
+| `_bash_capture_tasks`                   | `text_handler.py`   | Active `asyncio.Task` objects never cancelled on topic deletion |
+| `_loop_alert_pairs`                     | `msg_telegram.py`   | Bounded by LRU (100 entries) but never per-topic cleaned        |
+| `_last_send_time` / `_rate_limit_locks` | `message_sender.py` | Grow unbounded with `chat_id` keys, never evicted               |
 
 ### Cascading Changes
 
-- **Adding a similar status snapshot for another provider** (e.g., Gemini) would require duplicating the `_maybe_send_codex_status_snapshot` pattern in bot.py, creating more provider-specific branches in the orchestration layer.
-- **Changing Codex transcript format** requires changes in both `providers/codex.py` and the top-level `codex_status.py` — two files in different packages that share [model-level knowledge](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) of the same data format.
+- **Adding a new per-topic feature** (e.g., a per-window message counter) requires changes in the feature module _and_ `cleanup.py` — a mandatory two-file change that is easy to forget.
+- **Changing `thread_router.resolve_chat_id()` semantics** silently breaks cleanup for all `(chat_id, thread_id)`-keyed state.
+- **Deleting a handler module** requires also removing its lazy import from `cleanup.py`, or cleanup crashes on the missing import.
 
 ### Recommended Improvement
 
-Move the provider-specific logic behind the provider protocol:
+Consolidate per-topic state into a single registry with a uniform key:
 
-1. Move `codex_status.py` into `providers/` and have `CodexProvider` expose status snapshot building through a new optional protocol method (e.g., `build_status_fallback(transcript_path, ...) -> str | None`).
-2. Move `interactive_prompt_formatter.py` into `providers/` (it's already only used by `CodexProvider`).
-3. Replace the `capabilities.name == "codex"` check in bot.py with a capability query (e.g., `capabilities.supports_status_fallback`).
+1. **Create a `TopicStateRegistry`** with a `register(key, cleanup_fn)` API. Modules register their cleanup functions at import time (like `callback_registry`'s `@register` pattern). `cleanup.py` becomes a one-liner: `registry.clear(topic_key)`.
+2. **Standardize on `window_id` as the universal key** for window-scoped state, and `(user_id, thread_id)` for topic-scoped state. Modules that currently use `(chat_id, thread_id)` switch to `(user_id, thread_id)` — the `resolve_chat_id` translation moves to the point of use (emoji rendering, shell command display) rather than cleanup.
+3. **Fix the three leaks**: cancel `_bash_capture_tasks` in `clear_topic_state`, add `_loop_alert_pairs` cleanup keyed by window_id, and add TTL eviction to `_last_send_time`.
 
-**Trade-off**: Adds one optional method to the `AgentProvider` protocol. This is minimal cost for restoring the protocol's design intent — consumers should never need to know which provider they're talking to.
+Trade-off: the registry adds a small abstraction layer (~50 lines). The payoff is that new stateful features wire themselves into cleanup via a one-line registration call instead of a cross-module lazy-import edit, and the cleanup path becomes verifiable (the registry knows all registered state).
 
----
+## Issue: Cross-Strategy Encapsulation Violations in Polling
 
-## Issue: Shell Prompt Implicit Contract
-
-**Integration**: `providers/shell.py` -> `handlers/shell_capture.py`, `handlers/status_polling.py`
-**Severity**: SIGNIFICANT
+**Integration**: `TopicLifecycleStrategy` → `TerminalStatusStrategy._states` (private dict)
+**Severity**: Minor
 
 ### Knowledge Leakage
 
-The shell prompt marker (`⌘N⌘` in wrap mode, `{prefix}:N❯` in replace mode) is a critical [integration contract](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) between three modules:
+`TopicLifecycleStrategy` directly accesses `self._terminal._states` — the private state dict of `TerminalStatusStrategy` — in five methods: `reset_autoclose_state`, `clear_probe_failures`, `reset_probe_failures_state`, `clear_seen_status`, and `reset_seen_status_state`. This means `TopicLifecycleStrategy` knows the internal data structure of its sibling strategy, bypassing the public method interface that `TerminalStatusStrategy` provides.
 
-- `shell.py` defines and injects the marker, exposes `match_prompt()` returning a raw `re.Match`.
-- `shell_capture.py` imports `match_prompt()` and extracts exit codes and sequence numbers by accessing regex groups positionally (group 1 = sequence number, group 2 = trailing text).
-- `status_polling.py` calls `has_prompt_marker()` and `setup_shell_prompt()` to detect idle state and trigger marker recovery.
-
-The `match_prompt()` function is the single source of truth for the regex, which is good. But the _semantics_ of the match groups are implicit — `shell_capture.py` assumes group(1) is always the exit code integer and group(2) is always the command echo. These assumptions are not enforced at the API level and will break silently if the marker format evolves.
+Additionally, `polling_coordinator.py` imports five underscore-prefixed constants (`_ACTIVITY_THRESHOLD`, `_MAX_PROBE_FAILURES`, `_PANE_COUNT_TTL`, `_STARTUP_TIMEOUT`, `_TYPING_INTERVAL`) from `polling_strategies.py` and uses them to drive threshold logic inline. The coordinator co-authors the decision logic that strategies should own.
 
 ### Complexity Impact
 
-The shell subsystem is among the most actively developed areas of the codebase (wrap/replace modes, multi-shell support, lazy recovery). Each change to the prompt format carries risk of silent breakage in output extraction — no type error, no test failure until runtime. This is [accidental volatility](https://coupling.dev/posts/dimensions-of-coupling/volatility/) introduced by the implicit contract, not by domain requirements.
+This is a contained issue. Both the coordinator and all strategies live in the same package, and the affected logic is cohesive (all related to terminal status polling). The [distance](https://coupling.dev/posts/dimensions-of-coupling/distance/) is very low — same package, same developer, same deployment unit. The practical impact is limited to making the strategy classes harder to refactor independently: renaming `_states` or changing its structure in `TerminalStatusStrategy` requires updating `TopicLifecycleStrategy` in lockstep.
 
 ### Cascading Changes
 
-- **Adding a timestamp to the marker** would change the group positions, breaking `shell_capture.py`'s exit code extraction.
-- **Switching prompt modes** (wrap <-> replace) changes the regex but not the group semantics — today. A future mode could break the assumption.
-- **Adding a new marker field** (e.g., shell PID) would shift group indices in one mode but not the other.
+- **Changing `WindowPollState` fields** in `TerminalStatusStrategy._states` cascades to 5 methods in `TopicLifecycleStrategy`.
+- **Changing threshold values** requires updating both the constant definition in `polling_strategies.py` and the comparison logic in `polling_coordinator.py`.
 
 ### Recommended Improvement
 
-Replace the raw `re.Match` return with a typed dataclass:
+Add public methods to `TerminalStatusStrategy` for the operations that `TopicLifecycleStrategy` currently performs by reaching into `_states`:
 
-```python
-@dataclass(frozen=True)
-class PromptMatch:
-    sequence_number: int
-    trailing_text: str
-    raw_line: str
-```
+- `clear_probe_failures(window_id)`, `reset_all_probe_failures()`
+- `clear_seen_status(window_id)`, `reset_all_seen_status()`
+- `clear_unbound_timer(window_id)`, `reset_all_unbound_timers()`
 
-`shell.py` exports `match_prompt() -> PromptMatch | None`. Consumers access named fields instead of positional groups. Adding new fields to the marker only requires updating `PromptMatch` and the parsing logic in `shell.py` — consumers that don't use the new fields are unaffected.
+Move threshold comparisons (`>= _MAX_PROBE_FAILURES`, `>= _STARTUP_TIMEOUT`) inside strategy methods so the coordinator delegates rather than evaluates.
 
-**Trade-off**: One dataclass and a minor function signature change. Minimal cost, eliminates a class of silent runtime failures.
+Trade-off: ~30 lines of method additions. The [volatility](https://coupling.dev/posts/dimensions-of-coupling/volatility/) of this area is medium, so this is lower priority than Issues 1–3 but straightforward to fix.
+
+## Well-Balanced Integrations
+
+Several integrations demonstrate good [modularity](https://coupling.dev/posts/core-concepts/modularity/):
+
+- **Hook System → Session Monitor**: [Contract coupling](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) via structured JSONL files between separate processes. High [distance](https://coupling.dev/posts/dimensions-of-coupling/distance/), low [volatility](https://coupling.dev/posts/dimensions-of-coupling/volatility/). The gold standard in this codebase.
+- **Provider Protocol → Consumers**: [Contract coupling](https://coupling.dev/posts/dimensions-of-coupling/integration-strength/) via `AgentProvider` protocol and `ProviderCapabilities` dataclass. Capability flags gate behavior without name-string checks.
+- **LLM / Whisper Subsystems**: Protocol + factory pattern with zero cross-coupling. Adding a new LLM provider requires one file and one registry entry.
+- **Callback Registry**: Self-registering `@register` decorator. Adding a callback requires zero changes to `bot.py`.
+- **ThreadRouter**: Zero internal ccgram imports, 19 clean public methods, `to_dict`/`from_dict` serialization. The cleanest extraction from the original `SessionManager`.
+- **`mailbox.py` Core**: Zero internal imports. Pure data model (`Message` dataclass) with file I/O. The messaging feature's strongest module.
+- **Shell `PromptMatch` Contract**: Named dataclass fields replaced fragile `re.Match.group(N)` access. Low volatility, explicitly typed.
+
+## Modularity Scorecard
+
+| Dimension                          | Review #1 (Mar 28) | Review #2 (Mar 29) | Review #3 (Mar 30)                   | Trend                        |
+| ---------------------------------- | ------------------ | ------------------ | ------------------------------------ | ---------------------------- |
+| Largest module (lines)             | 2,018 (bot.py)     | 1,476 (session.py) | 1,526 (session.py)                   | Stable                       |
+| Modules > 1,000 lines              | 3                  | 2                  | 2                                    | Stable                       |
+| Max import count                   | 41 (bot.py)        | ~20 (bot.py)       | ~27 (polling_coordinator)            | Slight regression            |
+| Critical issues                    | 3                  | 0                  | 0                                    | Maintained                   |
+| Significant issues                 | 2                  | 1                  | 3                                    | New feature added coupling   |
+| Minor issues                       | 0                  | 2                  | 1                                    | Improved                     |
+| Balanced integrations              | 2                  | 6                  | 7                                    | Improved                     |
+| Late import workarounds            | Not measured       | 7 (cleanup.py)     | 14 (cleanup.py)                      | Worsened (new feature state) |
+| Modules with zero internal imports | Not measured       | Not measured       | 3 (mailbox, msg_skill, ThreadRouter) | Baseline                     |
+
+## Priority Recommendations
+
+1. **P1**: Fix inter-agent messaging private-interface coupling — promote private functions to public APIs, replace shared mutable dict with accessor functions, break the broker↔telegram cycle.
+2. **P1**: Fix the three active state leaks (`_bash_capture_tasks`, `_loop_alert_pairs`, `_last_send_time`).
+3. **P2**: Remove SessionManager's 9 pass-through thread-routing methods; extract `UserPreferences` (6 methods, 2 consumers).
+4. **P2**: Introduce a `TopicStateRegistry` to replace cleanup.py's 14 lazy imports with a self-registration pattern.
+5. **P3**: Add public methods to `TerminalStatusStrategy` to eliminate `TopicLifecycleStrategy`'s 5 private-state accesses.
 
 ---
 

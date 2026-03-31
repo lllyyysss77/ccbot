@@ -25,12 +25,20 @@ async def clear_topic_state(
     bot: Bot | None = None,
     user_data: dict[str, Any] | None = None,
     window_id: str | None = None,
+    *,
+    window_dead: bool = True,
 ) -> None:
     """Clear all memory state associated with a topic.
 
     Dispatches registered cleanups via TopicStateRegistry, then handles
     bot-specific async cleanup and infrastructure I/O that cannot be
     registered as simple callbacks.
+
+    Args:
+        window_dead: When False, skip qualified-scope cleanup (delivery state,
+            peer metadata, spawn requests) because the tmux window is still
+            alive.  Callers that keep the window running (topic close, /unbind)
+            should pass ``window_dead=False``.
     """
     from ..config import config
     from ..thread_router import thread_router
@@ -40,7 +48,7 @@ async def clear_topic_state(
     chat_id = thread_router.resolve_chat_id(user_id, thread_id)
 
     qualified_id: str | None = None
-    if window_id:
+    if window_id and window_dead:
         qualified_id = (
             window_id
             if is_foreign_window(window_id)
