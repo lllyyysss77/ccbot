@@ -178,3 +178,31 @@ class TestClearAll:
 
         for fn in fns:
             fn.assert_called_once()
+
+    def test_clear_all_passes_correct_args_to_all_scopes(
+        self, registry: TopicStateRegistry
+    ):
+        topic_fn = MagicMock()
+        window_fn = MagicMock()
+        qualified_fn = MagicMock()
+        chat_fn = MagicMock()
+        topic_fn2 = MagicMock()
+        registry.register("topic")(topic_fn)
+        registry.register("topic")(topic_fn2)
+        registry.register("window")(window_fn)
+        registry.register("qualified")(qualified_fn)
+        registry.register("chat")(chat_fn)
+
+        registry.clear_all(
+            user_id=7,
+            thread_id=100,
+            window_id="@5",
+            qualified_id="ccgram:@5",
+            chat_id=-200,
+        )
+
+        topic_fn.assert_called_once_with(7, 100)
+        topic_fn2.assert_called_once_with(7, 100)
+        window_fn.assert_called_once_with("@5")
+        qualified_fn.assert_called_once_with("ccgram:@5")
+        chat_fn.assert_called_once_with(-200, 100)

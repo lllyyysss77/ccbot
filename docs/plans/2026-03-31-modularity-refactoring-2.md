@@ -373,7 +373,7 @@ Migrate modules that use `window_id` key.
 
 #### Task 9e: Finalize — remove old explicit calls from cleanup.py
 
-- [ ] `cleanup.py`: remove ALL old explicit cleanup calls and lazy imports; function becomes ~20 lines:
+- [x] `cleanup.py`: remove ALL old explicit cleanup calls and lazy imports; function becomes ~20 lines:
 
   ```python
   async def clear_topic_state(user_id, thread_id, bot=None, user_data=None, window_id=None):
@@ -388,9 +388,9 @@ Migrate modules that use `window_id` key.
       # ... keep bot-specific async cleanup (status msg edit, user_data clear) that can't be registered
   ```
 
-- [ ] ensure `topic_state_registry` is imported by `callback_registry.load_handlers()` (or explicitly imported in `bot.py`) so all registrations trigger at startup
-- [ ] write integration test: register 5 mock cleanups across all scopes → `clear_all()` → verify all 5 called with correct arguments
-- [ ] `make check` — must pass
+- [x] ensure `topic_state_registry` is imported by `callback_registry.load_handlers()` (or explicitly imported in `bot.py`) so all registrations trigger at startup
+- [x] write integration test: register 5 mock cleanups across all scopes → `clear_all()` → verify all 5 called with correct arguments
+- [x] `make check` — must pass
 
 ---
 

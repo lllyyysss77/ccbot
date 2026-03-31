@@ -108,10 +108,12 @@ def _find_handler(data: str) -> CallbackHandler | None:
 
 
 def load_handlers() -> None:
-    """Import all callback-bearing handler modules to trigger @register decorators."""
+    """Import handler modules to trigger @register and @topic_state.register decorators."""
     from . import (  # noqa: F401
+        command_history,
         directory_callbacks,
         history_callbacks,
+        hook_events,
         interactive_callbacks,
         msg_spawn,
         msg_telegram,
@@ -119,8 +121,11 @@ def load_handlers() -> None:
         resume_command,
         screenshot_callbacks,
         sessions_dashboard,
+        shell_capture,
         shell_commands,
         sync_command,
         voice_callbacks,
         window_callbacks,
     )
+
+    from .. import msg_discovery  # noqa: F401
