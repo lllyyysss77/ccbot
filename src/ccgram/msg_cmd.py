@@ -120,26 +120,10 @@ def _build_message_context(my_id: str) -> dict[str, str]:
 
 
 def _load_window_states() -> dict[str, WindowInfo]:
-    """Load window states from state.json (same as status_cmd pattern)."""
-    from .msg_discovery import WindowInfo
+    """Load window states from state.json."""
+    from .session import export_window_info
 
-    state_file = ccgram_dir() / "state.json"
-    if not state_file.exists():
-        return {}
-    try:
-        data = json.loads(state_file.read_text())
-    except json.JSONDecodeError, OSError:
-        return {}
-    result: dict[str, WindowInfo] = {}
-    for window_id, ws_data in data.get("window_states", {}).items():
-        if isinstance(ws_data, dict):
-            result[window_id] = WindowInfo(
-                cwd=ws_data.get("cwd", ""),
-                window_name=ws_data.get("window_name", ""),
-                provider_name=ws_data.get("provider_name", ""),
-                external=ws_data.get("external", False),
-            )
-    return result
+    return export_window_info()
 
 
 def _format_peers_table(peers: list[PeerInfo]) -> str:

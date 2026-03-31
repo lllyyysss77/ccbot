@@ -268,10 +268,10 @@ Design doc: `docs/design/session-state/design.md`
 
 With `UserPreferences` extracted (Task 7), `SessionManager` drops from ~50 to ~35 public methods. Now remove 9 more dead pass-throughs and add typed contracts.
 
-- [ ] `session.py`: delete 9 pass-through methods (lines ~1381-1440) — confirmed no callers:
+- [x] `session.py`: delete 9 pass-through methods (lines ~1381-1440) — confirmed no callers:
       `bind_thread`, `unbind_thread`, `get_window_for_thread`, `get_thread_for_window`, `get_all_thread_windows`, `resolve_window_for_thread`, `iter_thread_bindings`, `set_group_chat_id`, `resolve_chat_id`
-- [ ] verify no callers: `grep -rn "session_manager\.\(bind_thread\|unbind_thread\|get_window_for_thread\|get_thread_for_window\|get_all_thread_windows\|resolve_window_for_thread\|iter_thread_bindings\|set_group_chat_id\|resolve_chat_id\)" src/`
-- [ ] `session.py`: add `export_window_info() -> dict[str, WindowInfo]` as a module-level function (not a method — CLI needs it without bot token):
+- [x] verify no callers: `grep -rn "session_manager\.\(bind_thread\|unbind_thread\|get_window_for_thread\|get_thread_for_window\|get_all_thread_windows\|resolve_window_for_thread\|iter_thread_bindings\|set_group_chat_id\|resolve_chat_id\)" src/`
+- [x] `session.py`: add `export_window_info() -> dict[str, WindowInfo]` as a module-level function (not a method — CLI needs it without bot token):
   ```python
   def export_window_info() -> dict[str, WindowInfo]:
       """CLI-safe snapshot of window states. Reads state.json from disk."""
@@ -279,7 +279,7 @@ With `UserPreferences` extracted (Task 7), `SessionManager` drops from ~50 to ~3
       state = load_state_from_disk()  # reuse _load_state logic
       return {wid: WindowInfo(cwd=ws.get("cwd", ""), ...) for wid, ws in state.get("window_states", {}).items()}
   ```
-- [ ] `session.py`: define Protocol interfaces (additive — no consumer changes required):
+- [x] `session.py`: define Protocol interfaces (additive — no consumer changes required):
 
   ```python
   class WindowStateStore(Protocol):
@@ -304,9 +304,9 @@ With `UserPreferences` extracted (Task 7), `SessionManager` drops from ~50 to ~3
       def cycle_batch_mode(self, window_id: str) -> str: ...
   ```
 
-- [ ] `msg_cmd.py`: replace `_load_window_states()` function (lines 122-142) with call to `from ..session import export_window_info`; remove hardcoded `state.json` field names
-- [ ] write tests: `test_export_window_info_returns_dict`, `test_export_window_info_empty_state`, `test_protocols_are_satisfied` (verify `SessionManager` satisfies all 3 protocols via `isinstance` or `typing.runtime_checkable`)
-- [ ] `make check` — must pass
+- [x] `msg_cmd.py`: replace `_load_window_states()` function (lines 122-142) with call to `from ..session import export_window_info`; remove hardcoded `state.json` field names
+- [x] write tests: `test_export_window_info_returns_dict`, `test_export_window_info_empty_state`, `test_protocols_are_satisfied` (verify `SessionManager` satisfies all 3 protocols via `isinstance` or `typing.runtime_checkable`)
+- [x] `make check` — must pass
 
 ---
 

@@ -13,7 +13,7 @@ Responsibilities:
   - Re-resolve stale window IDs on startup (tmux server restart recovery).
 
 Key class: SessionManager (singleton instantiated as `session_manager`).
-Thread routing delegation: bind_thread, unbind_thread, get_window_for_thread, etc.
+Thread routing: delegated to ThreadRouter (see thread_router.py) — no pass-throughs.
 """
 
 import asyncio
@@ -22,8 +22,7 @@ import json
 import structlog
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterator
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 import aiofiles
 
@@ -36,6 +35,9 @@ from .thread_router import thread_router
 from .user_preferences import user_preferences
 from .utils import atomic_write_json
 from .window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window, is_window_id
+
+if TYPE_CHECKING:
+    from .msg_discovery import WindowInfo
 
 logger = structlog.get_logger()
 
@@ -90,6 +92,82 @@ def parse_emdash_provider(session_name: str) -> str:
             prefix = session_name.split(sep)[0]
             return prefix.removeprefix(EMDASH_SESSION_PREFIX)
     return ""
+
+
+def export_window_info() -> dict[str, "WindowInfo"]:
+    """CLI-safe snapshot of window states. Reads state.json from disk.
+
+    Returns {window_id: WindowInfo} without requiring a bot token or
+    SessionManager initialization. Used by ``ccgram msg`` CLI commands.
+    Uses ccgram_dir() so callers can patch the directory for testing.
+    """
+    from .msg_discovery import WindowInfo
+    from .utils import ccgram_dir
+
+    state_file = ccgram_dir() / "state.json"
+    if not state_file.exists():
+        return {}
+    try:
+        data = json.loads(state_file.read_text())
+    except json.JSONDecodeError, OSError:
+        return {}
+    result: dict[str, WindowInfo] = {}
+    for window_id, ws_data in data.get("window_states", {}).items():
+        if isinstance(ws_data, dict):
+            result[window_id] = WindowInfo(
+                cwd=ws_data.get("cwd", ""),
+                window_name=ws_data.get("window_name", ""),
+                provider_name=ws_data.get("provider_name", ""),
+                external=ws_data.get("external", False),
+            )
+    return result
+
+
+# --- Protocol interfaces for typed contracts ---
+# These define the subset of SessionManager used by each consumer category.
+# Additive only — no consumer changes required; protocols document the API
+# surface that each module group relies on.
+
+
+@runtime_checkable
+class WindowStateStore(Protocol):
+    """Read/write access to per-window persistent state."""
+
+    def get_window_state(self, window_id: str) -> "WindowState": ...
+    def get_display_name(self, window_id: str) -> str: ...
+    def get_session_id_for_window(self, window_id: str) -> str | None: ...
+    def clear_window_session(self, window_id: str) -> None: ...
+
+
+@runtime_checkable
+class SessionIO(Protocol):
+    """Send input to agent windows and read message history."""
+
+    async def send_to_window(
+        self, window_id: str, text: str, *, raw: bool = False
+    ) -> tuple[bool, str]: ...
+
+    async def resolve_session_for_window(
+        self, window_id: str
+    ) -> "ClaudeSession | None": ...
+
+    async def get_recent_messages(
+        self, window_id: str, *, start_byte: int = 0, end_byte: int | None = None
+    ) -> tuple[list[dict], int]: ...
+
+
+@runtime_checkable
+class WindowModeConfig(Protocol):
+    """Per-window mode getters/setters/cyclers (approval, notification, batch)."""
+
+    def get_approval_mode(self, window_id: str) -> str: ...
+    def set_window_approval_mode(self, window_id: str, mode: str) -> None: ...
+    def get_notification_mode(self, window_id: str) -> str: ...
+    def set_notification_mode(self, window_id: str, mode: str) -> None: ...
+    def cycle_notification_mode(self, window_id: str) -> str: ...
+    def get_batch_mode(self, window_id: str) -> str: ...
+    def set_batch_mode(self, window_id: str, mode: str) -> None: ...
+    def cycle_batch_mode(self, window_id: str) -> str: ...
 
 
 @dataclass
@@ -1299,45 +1377,6 @@ class SessionManager:
         self._save_state()
         return None
 
-    # --- Thread binding management (delegated to thread_router) ---
-
-    def bind_thread(
-        self, user_id: int, thread_id: int, window_id: str, window_name: str = ""
-    ) -> None:
-        """Bind a Telegram topic thread to a tmux window."""
-        thread_router.bind_thread(user_id, thread_id, window_id, window_name)
-
-    def unbind_thread(self, user_id: int, thread_id: int) -> str | None:
-        """Remove a thread binding. Returns the previously bound window_id, or None.
-
-        Display name cleanup is handled by thread_router.unbind_thread().
-        """
-        return thread_router.unbind_thread(user_id, thread_id)
-
-    def get_window_for_thread(self, user_id: int, thread_id: int) -> str | None:
-        """Look up the window_id bound to a thread."""
-        return thread_router.get_window_for_thread(user_id, thread_id)
-
-    def get_thread_for_window(self, user_id: int, window_id: str) -> int | None:
-        """Reverse lookup: get thread_id for a window (O(1) via reverse index)."""
-        return thread_router.get_thread_for_window(user_id, window_id)
-
-    def get_all_thread_windows(self, user_id: int) -> dict[int, str]:
-        """Get all thread bindings for a user."""
-        return thread_router.get_all_thread_windows(user_id)
-
-    def resolve_window_for_thread(
-        self,
-        user_id: int,
-        thread_id: int | None,
-    ) -> str | None:
-        """Resolve the tmux window_id for a user's thread."""
-        return thread_router.resolve_window_for_thread(user_id, thread_id)
-
-    def iter_thread_bindings(self) -> Iterator[tuple[int, int, str]]:
-        """Iterate all thread bindings as (user_id, thread_id, window_id)."""
-        return thread_router.iter_thread_bindings()
-
     def find_users_for_session(
         self,
         session_id: str,
@@ -1349,16 +1388,6 @@ class SessionManager:
             if state and state.session_id == session_id:
                 result.append((user_id, window_id, thread_id))
         return result
-
-    # --- Group chat ID management (delegated to thread_router) ---
-
-    def set_group_chat_id(self, user_id: int, thread_id: int, chat_id: int) -> None:
-        """Store the group chat ID for a user's thread."""
-        thread_router.set_group_chat_id(user_id, thread_id, chat_id)
-
-    def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
-        """Resolve the chat_id for sending messages."""
-        return thread_router.resolve_chat_id(user_id, thread_id)
 
     # --- Tmux helpers ---
 
