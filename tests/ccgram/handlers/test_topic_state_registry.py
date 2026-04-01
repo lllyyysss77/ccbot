@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ccgram.handlers.topic_state_registry import TopicStateRegistry
+from ccgram.topic_state_registry import TopicStateRegistry
 
 
 @pytest.fixture

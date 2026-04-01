@@ -395,12 +395,10 @@ class TestStatusPollingIntegration:
                 return_value=make_mock_provider(has_status=False),
             ),
         ):
-            from ccgram.handlers.polling_coordinator import (
-                _get_window_state,
-                update_status_message,
-            )
+            from ccgram.handlers.polling_coordinator import update_status_message
+            from ccgram.handlers.polling_strategies import terminal_strategy
 
-            _get_window_state("@0").has_seen_status = True
+            terminal_strategy.get_state("@0").has_seen_status = True
 
             mock_window = MagicMock()
             mock_window.pane_current_command = "node"

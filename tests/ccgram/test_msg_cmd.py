@@ -93,7 +93,7 @@ class TestListPeers:
         assert result.exit_code == 0
         assert "No peers found" in result.output
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_table_output(self, _mock_branch, runner: CliRunner, state_dir: Path):
         _write_state(
             state_dir,
@@ -110,7 +110,7 @@ class TestListPeers:
         assert "ccgram:@0" in result.output
         assert "claude" in result.output
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_json_output(self, _mock_branch, runner: CliRunner, state_dir: Path):
         _write_state(
             state_dir,
@@ -130,7 +130,7 @@ class TestListPeers:
 
 
 class TestFind:
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_filter_by_provider(self, _mock_branch, runner: CliRunner, state_dir: Path):
         _write_state(
             state_dir,
@@ -144,7 +144,7 @@ class TestFind:
         assert "ccgram:@0" in result.output
         assert "ccgram:@5" not in result.output
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_filter_by_team(
         self, _mock_branch, runner: CliRunner, state_dir: Path, mailbox_dir: Path
     ):
@@ -163,7 +163,7 @@ class TestFind:
         assert "ccgram:@0" in result.output
         assert "ccgram:@5" not in result.output
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_filter_by_cwd(self, _mock_branch, runner: CliRunner, state_dir: Path):
         _write_state(
             state_dir,
@@ -185,7 +185,7 @@ class TestFind:
         assert "ccgram:@0" in result.output
         assert "ccgram:@5" not in result.output
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_json_output(self, _mock_branch, runner: CliRunner, state_dir: Path):
         _write_state(
             state_dir,
@@ -349,7 +349,7 @@ class TestReply:
 
 
 class TestBroadcast:
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_to_all(
         self, _mock_branch, runner: CliRunner, mailbox: Mailbox, state_dir: Path
     ):
@@ -368,7 +368,7 @@ class TestBroadcast:
         assert len(mailbox.inbox("ccgram:@8")) == 1
         assert len(mailbox.inbox("ccgram:@0")) == 0
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_filtered_by_team(
         self,
         _mock_branch,
@@ -396,7 +396,7 @@ class TestBroadcast:
         assert len(mailbox.inbox("ccgram:@5")) == 1
         assert len(mailbox.inbox("ccgram:@8")) == 0
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_filtered_by_provider(
         self, _mock_branch, runner: CliRunner, mailbox: Mailbox, state_dir: Path
     ):
@@ -415,7 +415,7 @@ class TestBroadcast:
         assert "1 recipient" in result.output
         assert len(mailbox.inbox("ccgram:@5")) == 1
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_filtered_by_cwd(
         self, _mock_branch, runner: CliRunner, mailbox: Mailbox, state_dir: Path
     ):
@@ -449,7 +449,7 @@ class TestBroadcast:
         assert len(mailbox.inbox("ccgram:@8")) == 1
         assert len(mailbox.inbox("ccgram:@9")) == 0
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_no_recipients(
         self, _mock_branch, runner: CliRunner, state_dir: Path
     ):
@@ -463,7 +463,7 @@ class TestBroadcast:
         assert result.exit_code == 0
         assert "No matching recipients" in result.output
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_default_ttl(
         self, _mock_branch, runner: CliRunner, mailbox: Mailbox, state_dir: Path
     ):
@@ -478,7 +478,7 @@ class TestBroadcast:
         messages = mailbox.inbox("ccgram:@5")
         assert messages[0].ttl_minutes == 480
 
-    @patch("ccgram.msg_discovery._detect_branch", return_value="main")
+    @patch("ccgram.msg_discovery.detect_branch", return_value="main")
     def test_broadcast_telegram_visibility(
         self, _mock_branch, runner: CliRunner, mailbox: Mailbox, state_dir: Path
     ):

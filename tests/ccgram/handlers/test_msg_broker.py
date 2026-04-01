@@ -230,14 +230,15 @@ class TestMergeInjectionTexts:
 
 class TestWriteDeliveryFile:
     def test_writes_file(self, tmp_path):
-        path = write_delivery_file(tmp_path, "ccgram:@0", "123-abc", "long body text")
+        mb = Mailbox(tmp_path)
+        path = write_delivery_file(mb, "ccgram:@0", "123-abc", "long body text")
         assert path.exists()
         assert path.read_text() == "long body text"
         assert "deliver-123-abc.txt" in path.name
 
     def test_creates_directories(self, tmp_path):
-        mailbox_dir = tmp_path / "mailbox"
-        path = write_delivery_file(mailbox_dir, "ccgram:@0", "456", "body")
+        mb = Mailbox(tmp_path / "mailbox")
+        path = write_delivery_file(mb, "ccgram:@0", "456", "body")
         assert path.exists()
         assert path.parent.name == "tmp"
 
@@ -303,9 +304,7 @@ class TestBrokerDeliveryCycle:
         provider.capabilities.name = "shell"
         return provider
 
-    async def test_delivers_pending_message(
-        self, mailbox, mock_tmux, mock_provider, tmp_path
-    ):
+    async def test_delivers_pending_message(self, mailbox, mock_tmux, mock_provider):
         mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
         window_states = {"@5": MagicMock(provider_name="claude")}
 
@@ -319,7 +318,6 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
@@ -328,9 +326,7 @@ class TestBrokerDeliveryCycle:
         msgs = mailbox.inbox("ccgram:@5")
         assert len(msgs) == 0 or msgs[0].status == "delivered"
 
-    async def test_skips_shell_windows(
-        self, mailbox, mock_tmux, shell_provider, tmp_path
-    ):
+    async def test_skips_shell_windows(self, mailbox, mock_tmux, shell_provider):
         mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
         window_states = {"@5": MagicMock(provider_name="shell")}
 
@@ -339,15 +335,13 @@ class TestBrokerDeliveryCycle:
             return_value=shell_provider,
         ):
             count = await broker_delivery_cycle(
-                mailbox, mock_tmux, window_states, "ccgram", 10, tmp_path
+                mailbox, mock_tmux, window_states, "ccgram", 10
             )
 
         assert count == 0
         mock_tmux.send_keys.assert_not_called()
 
-    async def test_skips_broadcast_messages(
-        self, mailbox, mock_tmux, mock_provider, tmp_path
-    ):
+    async def test_skips_broadcast_messages(self, mailbox, mock_tmux, mock_provider):
         mailbox.send("ccgram:@0", "ccgram:@5", "broadcast", msg_type="broadcast")
         window_states = {"@5": MagicMock(provider_name="claude")}
 
@@ -361,14 +355,13 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
         assert count == 0
         mock_tmux.send_keys.assert_not_called()
 
-    async def test_sets_delivered_at(self, mailbox, mock_tmux, mock_provider, tmp_path):
+    async def test_sets_delivered_at(self, mailbox, mock_tmux, mock_provider):
         msg = mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
         window_states = {"@5": MagicMock(provider_name="claude")}
 
@@ -382,7 +375,6 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
@@ -392,9 +384,7 @@ class TestBrokerDeliveryCycle:
         assert delivered[0].delivered_at is not None
         assert delivered[0].status == "delivered"
 
-    async def test_rate_limiting_enforcement(
-        self, mailbox, mock_tmux, mock_provider, tmp_path
-    ):
+    async def test_rate_limiting_enforcement(self, mailbox, mock_tmux, mock_provider):
         mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
         window_states = {"@5": MagicMock(provider_name="claude")}
         for _ in range(10):
@@ -410,15 +400,12 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
         assert count == 0
 
-    async def test_merges_multiple_messages(
-        self, mailbox, mock_tmux, mock_provider, tmp_path
-    ):
+    async def test_merges_multiple_messages(self, mailbox, mock_tmux, mock_provider):
         mailbox.send("ccgram:@0", "ccgram:@5", "msg1", msg_type="request")
         mailbox.send("ccgram:@0", "ccgram:@5", "msg2", msg_type="notify")
         window_states = {"@5": MagicMock(provider_name="claude")}
@@ -433,7 +420,6 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
@@ -443,7 +429,7 @@ class TestBrokerDeliveryCycle:
         assert "---" in call_text
 
     async def test_file_reference_for_long_body(
-        self, mailbox, mock_tmux, mock_provider, tmp_path
+        self, mailbox, mock_tmux, mock_provider
     ):
         long_body = "x" * 600
         mailbox.send("ccgram:@0", "ccgram:@5", long_body, msg_type="notify")
@@ -459,7 +445,6 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
@@ -468,7 +453,7 @@ class TestBrokerDeliveryCycle:
         assert "See:" in call_text
 
     async def test_loop_detection_pauses_delivery(
-        self, mailbox, mock_tmux, mock_provider, tmp_path
+        self, mailbox, mock_tmux, mock_provider
     ):
         mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
         for _ in range(_LOOP_THRESHOLD):
@@ -485,13 +470,12 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
         assert count == 0
 
-    async def test_failed_send_keys_no_delivery(self, mailbox, mock_provider, tmp_path):
+    async def test_failed_send_keys_no_delivery(self, mailbox, mock_provider):
         mock_tmux = AsyncMock()
         mock_tmux.send_keys = AsyncMock(return_value=False)
         mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
@@ -507,7 +491,6 @@ class TestBrokerDeliveryCycle:
                 window_states,
                 "ccgram",
                 10,
-                tmp_path,
                 idle_windows=frozenset({"ccgram:@5"}),
             )
 
@@ -546,10 +529,10 @@ class TestModuleLevelFunctions:
 
 class TestConstants:
     def test_broker_cycle_interval(self):
-        assert BROKER_CYCLE_INTERVAL > 0
+        assert BROKER_CYCLE_INTERVAL == 2.0
 
     def test_sweep_interval(self):
-        assert SWEEP_INTERVAL > 0
+        assert SWEEP_INTERVAL == 300.0
 
     def test_injection_char_limit(self):
         assert _INJECTION_CHAR_LIMIT == 500

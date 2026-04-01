@@ -328,3 +328,94 @@ class TestIsShellPrompt:
     @pytest.mark.parametrize("cmd", ["claude", "codex", "python", "node"])
     def test_non_shell_not_detected(self, cmd):
         assert not is_shell_prompt(cmd)
+
+
+class TestDecisionMethods:
+    def test_is_recently_active_true(self):
+        strategy = TerminalStatusStrategy()
+        now = time.monotonic()
+        assert strategy.is_recently_active("@0", now - 1.0)
+        assert strategy.get_state("@0").has_seen_status
+
+    def test_is_recently_active_false_when_stale(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_recently_active("@0", time.monotonic() - 60.0)
+
+    def test_is_recently_active_false_when_none(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_recently_active("@0", None)
+
+    def test_is_startup_expired_true(self):
+        from ccgram.handlers.polling_strategies import STARTUP_TIMEOUT
+
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.startup_time = time.monotonic() - STARTUP_TIMEOUT - 1.0
+        assert strategy.is_startup_expired("@0")
+
+    def test_is_startup_expired_false_within_grace(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.startup_time = time.monotonic()
+        assert not strategy.is_startup_expired("@0")
+
+    def test_is_startup_expired_false_no_startup(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_startup_expired("@0")
+
+    def test_is_single_pane_cached_true(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.pane_count_cache = (1, time.monotonic() + 10.0)
+        assert strategy.is_single_pane_cached("@0")
+
+    def test_is_single_pane_cached_false_multi(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.pane_count_cache = (3, time.monotonic() + 10.0)
+        assert not strategy.is_single_pane_cached("@0")
+
+    def test_is_single_pane_cached_false_expired(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.pane_count_cache = (1, time.monotonic() - 1.0)
+        assert not strategy.is_single_pane_cached("@0")
+
+    def test_is_single_pane_cached_false_no_cache(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_single_pane_cached("@0")
+
+    def test_is_typing_throttled_true(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ts = lifecycle.get_state(1, 42)
+        ts.last_typing_sent = time.monotonic()
+        assert lifecycle.is_typing_throttled(1, 42)
+
+    def test_is_typing_throttled_false_past_interval(self):
+        from ccgram.handlers.polling_strategies import TYPING_INTERVAL
+
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ts = lifecycle.get_state(1, 42)
+        ts.last_typing_sent = time.monotonic() - TYPING_INTERVAL - 1.0
+        assert not lifecycle.is_typing_throttled(1, 42)
+
+    def test_is_typing_throttled_false_no_state(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        assert not lifecycle.is_typing_throttled(1, 42)
+
+    def test_should_skip_probe_true(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ws = terminal.get_state("@0")
+        ws.probe_failures = MAX_PROBE_FAILURES
+        assert lifecycle.should_skip_probe("@0")
+
+    def test_should_skip_probe_false(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ws = terminal.get_state("@0")
+        ws.probe_failures = MAX_PROBE_FAILURES - 1
+        assert not lifecycle.should_skip_probe("@0")

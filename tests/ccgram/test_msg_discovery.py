@@ -250,7 +250,7 @@ class TestBranchDetection:
             ),
         }
         with patch(
-            "ccgram.msg_discovery._detect_branch",
+            "ccgram.msg_discovery.detect_branch",
             return_value="feat/refund",
         ):
             peers = list_peers(
@@ -271,7 +271,7 @@ class TestBranchDetection:
             ),
         }
         with patch(
-            "ccgram.msg_discovery._detect_branch",
+            "ccgram.msg_discovery.detect_branch",
             return_value="",
         ):
             peers = list_peers(
@@ -282,7 +282,7 @@ class TestBranchDetection:
         assert peers[0].branch == ""
 
     def test_detect_branch_real_git_repo(self, tmp_path: Path) -> None:
-        from ccgram.msg_discovery import _detect_branch
+        from ccgram.msg_discovery import detect_branch
 
         git_env = {
             "GIT_AUTHOR_NAME": "test",
@@ -302,12 +302,12 @@ class TestBranchDetection:
             capture_output=True,
             env=git_env,
         )
-        assert _detect_branch(str(tmp_path)) == "feat/test"
+        assert detect_branch(str(tmp_path)) == "feat/test"
 
     def test_detect_branch_nonexistent_dir(self) -> None:
-        from ccgram.msg_discovery import _detect_branch
+        from ccgram.msg_discovery import detect_branch
 
-        assert _detect_branch("/nonexistent/path") == ""
+        assert detect_branch("/nonexistent/path") == ""
 
 
 def _load_declared(path: Path) -> dict:
