@@ -102,23 +102,22 @@ def format_batch_message(
     count = len(entries)
     label = "tool call" if count == 1 else "tool calls"
     header = f"\u26a1 {count} {label}"
-    if subagent_label:
+    has_task_tools = any(entry.tool_name in _TASK_TOOL_NAMES for entry in entries)
+    if subagent_label and not has_task_tools:
         header = f"{header} [{subagent_label}]"
     lines = [header]
+    if subagent_label and has_task_tools:
+        lines.append(subagent_label)
 
-    for entry in entries:
-        line = entry.tool_use_text
-        if entry.tool_result_text is not None:
-            line = f"{line}  \u23bf  {entry.tool_result_text}"
-        else:
-            line = f"{line}  \u23f3"
-        lines.append(line)
+    lines.extend(_format_mixed_batch_lines(entries))
 
     return "\n".join(lines)
 
 
-_MARKDOWN_TOOL_SUMMARY_RE = re.compile(r"^\*\*[^*]+\*\*(?:\s+`([^`]+)`)?$")
+_MARKDOWN_TOOL_PREFIX_RE = re.compile(r"^\*\*([^*]+)\*\*(.*)$")
 _PLAIN_TASK_CREATE_RE = re.compile(r"^TaskCreate\s+(.+)$")
+_TASK_TOOL_NAMES = frozenset({"TaskCreate", "TaskUpdate", "TaskList"})
+_MIN_BACKTICK_WRAPPED_LENGTH = 2
 
 
 def _format_task_create_batch(
@@ -149,15 +148,138 @@ def _format_task_create_batch(
     return "\n".join(lines)
 
 
+def _format_mixed_batch_lines(entries: list[ToolBatchEntry]) -> list[str]:
+    """Render batch body lines, grouping task-tool runs into task sections."""
+    lines: list[str] = []
+    index = 0
+
+    while index < len(entries):
+        entry = entries[index]
+        if entry.tool_name == "TaskCreate":
+            task_entries: list[ToolBatchEntry] = []
+            while index < len(entries) and entries[index].tool_name == "TaskCreate":
+                task_entries.append(entries[index])
+                index += 1
+            section = _format_task_create_section(task_entries)
+            if section:
+                lines.extend(section)
+            else:
+                lines.extend(_format_batch_entry(task) for task in task_entries)
+            continue
+        if entry.tool_name == "TaskUpdate":
+            update_entries: list[ToolBatchEntry] = []
+            while index < len(entries) and entries[index].tool_name == "TaskUpdate":
+                update_entries.append(entries[index])
+                index += 1
+            section = _format_task_update_section(update_entries)
+            if section:
+                lines.extend(section)
+            else:
+                lines.extend(_format_batch_entry(task) for task in update_entries)
+            continue
+        if entry.tool_name == "TaskList":
+            lines.extend(_format_task_list_section(entry))
+            index += 1
+            continue
+
+        lines.append(_format_batch_entry(entry))
+        index += 1
+
+    return lines
+
+
+def _format_task_create_section(entries: list[ToolBatchEntry]) -> list[str]:
+    """Render a contiguous TaskCreate run inside a mixed batch."""
+    if not entries:
+        return []
+
+    titles = [_extract_task_create_title(entry) for entry in entries]
+    if any(not title for title in titles):
+        return []
+
+    action = (
+        "Created"
+        if all(entry.tool_result_text is not None for entry in entries)
+        else "Creating"
+    )
+    task_label = "task" if len(entries) == 1 else "tasks"
+    heading = (
+        f"{action} {len(entries)} {task_label}\u2026"
+        if action == "Creating"
+        else f"{action} {len(entries)} {task_label}"
+    )
+    return [
+        heading,
+        *(f"{index}. {title}" for index, title in enumerate(titles, start=1)),
+    ]
+
+
+def _format_task_update_section(entries: list[ToolBatchEntry]) -> list[str]:
+    """Render a contiguous TaskUpdate run inside a mixed batch."""
+    if not entries:
+        return []
+
+    labels = [_extract_task_tool_suffix(entry) for entry in entries]
+    if any(not label for label in labels):
+        return []
+
+    action = (
+        "Updated"
+        if all(entry.tool_result_text is not None for entry in entries)
+        else "Updating"
+    )
+    task_label = "task" if len(entries) == 1 else "tasks"
+    heading = (
+        f"{action} {len(entries)} {task_label}\u2026"
+        if action == "Updating"
+        else f"{action} {len(entries)} {task_label}"
+    )
+    return [heading, *(f"- {label}" for label in labels)]
+
+
+def _format_task_list_section(entry: ToolBatchEntry) -> list[str]:
+    """Render TaskList as task-list sync progress."""
+    summary = _extract_task_tool_suffix(entry)
+    heading = (
+        "Synced task list"
+        if entry.tool_result_text is not None
+        else "Refreshing task list\u2026"
+    )
+    if summary and summary != "refresh":
+        heading = f"{heading} ({summary})"
+    return [heading]
+
+
+def _format_batch_entry(entry: ToolBatchEntry) -> str:
+    """Render one standard batch row."""
+    line = entry.tool_use_text
+    if entry.tool_result_text is not None:
+        return f"{line}  \u23bf  {entry.tool_result_text}"
+    return f"{line}  \u23f3"
+
+
 def _extract_task_create_title(entry: ToolBatchEntry) -> str:
     """Extract the visible title from a TaskCreate summary."""
+    return _extract_task_tool_suffix(entry)
+
+
+def _extract_task_tool_suffix(entry: ToolBatchEntry) -> str:
+    """Extract the summary text after a markdown/plain task-tool prefix."""
     text = entry.tool_use_text.strip()
     if not text:
         return ""
 
-    markdown_match = _MARKDOWN_TOOL_SUMMARY_RE.match(text)
+    markdown_match = _MARKDOWN_TOOL_PREFIX_RE.match(text)
     if markdown_match:
-        return (markdown_match.group(1) or "").strip()
+        _tool_name, suffix = markdown_match.groups()
+        stripped = suffix.strip()
+        if (
+            stripped.startswith("`")
+            and stripped.endswith("`")
+            and len(stripped) >= _MIN_BACKTICK_WRAPPED_LENGTH
+        ):
+            stripped = stripped[1:-1].strip()
+        return stripped
 
     plain_match = _PLAIN_TASK_CREATE_RE.match(text)
     if plain_match:

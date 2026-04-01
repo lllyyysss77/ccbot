@@ -166,6 +166,67 @@ class TestFormatBatchMessage:
 
         assert result.startswith("\u26a1 1 tool call")
 
+    def test_mixed_batch_groups_task_create_entries(self) -> None:
+        entries = [
+            ToolBatchEntry(
+                "t0", "**ToolSearch** `select:TaskCreate,TaskUpdate,TaskList`"
+            ),
+            ToolBatchEntry(
+                "t1",
+                "**TaskCreate** `Tune regex linter`",
+                tool_name="TaskCreate",
+            ),
+            ToolBatchEntry(
+                "t2",
+                "**TaskCreate**Apply fixes to opus agents",
+                tool_name="TaskCreate",
+            ),
+        ]
+
+        result = format_batch_message(entries, subagent_label="\U0001f916 subagent")
+
+        lines = result.split("\n")
+        assert lines[0] == "\u26a1 3 tool calls"
+        assert lines[1] == "\U0001f916 subagent"
+        assert "ToolSearch" in lines[2]
+        assert "Creating 2 tasks\u2026" in result
+        assert "1. Tune regex linter" in result
+        assert "2. Apply fixes to opus agents" in result
+
+    def test_task_update_entries_render_as_progress_section(self) -> None:
+        entries = [
+            ToolBatchEntry(
+                "t1",
+                "**TaskUpdate** `Tune regex linter -> in progress`",
+                tool_name="TaskUpdate",
+            ),
+            ToolBatchEntry(
+                "t2",
+                "**TaskUpdate** `Apply fixes to opus agents -> completed`",
+                tool_name="TaskUpdate",
+                tool_result_text="Done",
+            ),
+        ]
+
+        result = format_batch_message(entries)
+
+        assert "Updating 2 tasks\u2026" in result
+        assert "- Tune regex linter -> in progress" in result
+        assert "- Apply fixes to opus agents -> completed" in result
+
+    def test_task_list_entry_renders_as_task_list_sync(self) -> None:
+        entries = [
+            ToolBatchEntry(
+                "t1",
+                "**TaskList** `refresh`",
+                tool_name="TaskList",
+            )
+        ]
+
+        result = format_batch_message(entries)
+
+        assert result == "\u26a1 1 tool call\nRefreshing task list\u2026"
+
 
 class TestIsBatchEligible:
     @pytest.mark.parametrize("content_type", ["tool_use", "tool_result"])
