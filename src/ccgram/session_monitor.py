@@ -617,8 +617,8 @@ class SessionMonitor:
                     new_messages,
                     window_id=sid_to_wid.get(session_id, ""),
                 )
-            except OSError as e:
-                logger.debug("Error processing session %s: %s", session_id, e)
+            except Exception:
+                logger.exception("Error processing session %s", session_id)
 
         # Fallback path: scan projects for sessions without transcript_path
         if fallback_session_ids:
@@ -633,9 +633,9 @@ class SessionMonitor:
                         new_messages,
                         window_id=sid_to_wid.get(session_info.session_id, ""),
                     )
-                except OSError as e:
-                    logger.debug(
-                        "Error processing session %s: %s", session_info.session_id, e
+                except Exception:
+                    logger.exception(
+                        "Error processing session %s", session_info.session_id
                     )
 
         self.state.save_if_dirty()

@@ -515,6 +515,85 @@ class TestCheckForUpdates:
         assert "hello" in msgs[0].text
 
 
+class TestCheckForUpdatesExceptionResilience:
+    async def test_error_in_one_session_does_not_block_others(self, tmp_path) -> None:
+        good_file = tmp_path / "good.jsonl"
+        good_file.write_text(
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+        )
+        bad_file = tmp_path / "bad.jsonl"
+        bad_file.write_text('{"type":"summary"}\n')
+
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "ms.json",
+        )
+        current_map = {
+            "@0": {
+                "session_id": "sess-bad",
+                "cwd": "/proj",
+                "window_name": "bad",
+                "transcript_path": str(bad_file),
+            },
+            "@1": {
+                "session_id": "sess-good",
+                "cwd": "/proj2",
+                "window_name": "good",
+                "transcript_path": str(good_file),
+            },
+        }
+
+        original = monitor._process_session_file
+
+        async def _blow_up(session_id, *args, **kwargs):
+            if session_id == "sess-bad":
+                raise TypeError("simulated provider bug")
+            return await original(session_id, *args, **kwargs)
+
+        with patch.object(monitor, "_process_session_file", side_effect=_blow_up):
+            await monitor.check_for_updates(current_map)
+
+        assert monitor.state.get_session("sess-good") is not None
+        assert monitor.state.get_session("sess-bad") is None
+
+    async def test_error_in_direct_session_still_saves_state(self, tmp_path) -> None:
+        good_file = tmp_path / "good.jsonl"
+        good_file.write_text('{"type":"summary"}\n')
+        bad_file = tmp_path / "bad.jsonl"
+        bad_file.write_text('{"type":"summary"}\n')
+
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "ms.json",
+        )
+        current_map = {
+            "@0": {
+                "session_id": "sess-good",
+                "cwd": "/proj",
+                "window_name": "good",
+                "transcript_path": str(good_file),
+            },
+            "@1": {
+                "session_id": "sess-bad",
+                "cwd": "/proj2",
+                "window_name": "bad",
+                "transcript_path": str(bad_file),
+            },
+        }
+
+        original = monitor._process_session_file
+
+        async def _blow_up(session_id, *args, **kwargs):
+            if session_id == "sess-bad":
+                raise ValueError("corrupt transcript")
+            return await original(session_id, *args, **kwargs)
+
+        with patch.object(monitor, "_process_session_file", side_effect=_blow_up):
+            await monitor.check_for_updates(current_map)
+
+        assert monitor.state.get_session("sess-good") is not None
+
+
 class TestActivityTracking:
     def test_get_last_activity_returns_none_for_unknown(
         self, monitor: SessionMonitor
