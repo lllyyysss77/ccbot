@@ -221,12 +221,6 @@ async def _capture_interactive_content(
         pane_title = await tmux_manager.get_pane_title(window_id)
     status = provider.parse_terminal_status(pane_text, pane_title=pane_title)
     if status is None or not status.is_interactive:
-        logger.debug(
-            "No interactive UI detected in window_id %s pane %s (last 3 lines: %s)",
-            window_id,
-            pane_id,
-            pane_text.strip().split("\n")[-3:],
-        )
         return None
 
     if not status.ui_type:
