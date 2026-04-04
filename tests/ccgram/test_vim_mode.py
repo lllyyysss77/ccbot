@@ -52,7 +52,15 @@ class TestHasInsertIndicator:
 
     def test_insert_with_surrounding_text(self):
         pane = "output\nstatus: -- INSERT -- (paste)\ndone"
+        assert _has_insert_indicator(pane) is False
+
+    def test_insert_with_whitespace(self):
+        pane = "output\n  -- INSERT --  \ndone"
         assert _has_insert_indicator(pane) is True
+
+    def test_claude_status_bar_insert(self):
+        pane = "output\n-- INSERT -- ⏸ plan mode on (shift+tab to cycle)\ndone"
+        assert _has_insert_indicator(pane) is False
 
 
 # ── notify / clear / reset ─────────────────────────────────────────────

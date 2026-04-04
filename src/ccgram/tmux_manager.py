@@ -18,6 +18,7 @@ Module-level: _vim_state cache, _vim_locks for per-window send serialization.
 import asyncio
 import contextlib
 import fnmatch
+import re
 import shlex
 import structlog
 import subprocess
@@ -47,9 +48,19 @@ _vim_locks: dict[str, asyncio.Lock] = {}
 _VIM_PROBE_DELAY = 0.12
 
 
+_VIM_INSERT_RE = re.compile(r"^--\s*INSERT\s*--\s*$")
+
+
 def _has_insert_indicator(pane_text: str) -> bool:
-    """Check if ``-- INSERT --`` appears in the last 3 lines of pane text."""
-    return any("-- INSERT --" in line for line in pane_text.splitlines()[-3:])
+    """Check if vim's ``-- INSERT --`` appears in the last 3 lines of pane text.
+
+    Only matches lines where ``-- INSERT --`` is the sole content (with optional
+    whitespace), avoiding false positives from Claude Code's own status bar which
+    renders ``-- INSERT -- ⏸ plan mode on ...`` with trailing text.
+    """
+    return any(
+        _VIM_INSERT_RE.search(line.strip()) for line in pane_text.splitlines()[-3:]
+    )
 
 
 def notify_vim_insert_seen(window_id: str) -> None:
