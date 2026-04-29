@@ -86,9 +86,11 @@ Each Telegram Forum topic binds to one tmux window. Messages you type are sent a
 ### Real-Time Monitoring
 
 - **Full status context** — status line shows what the agent is actually doing ("📝 Writing tests for auth module"), not a generic label
+- **Configurable topic emoji color scheme** — `CCGRAM_STATUS_MODE=system` (default, green = agent working) or `user` (green = idle, ready for input) — pick the convention that matches how you scan the topic list
 - **Completion summaries** — when an agent finishes, a single-line LLM summary of what was accomplished edits the Ready message in-place (~1-2s delay; static enriched Ready appears immediately)
 - **Enriched Ready message** — task checklist, turn count, and last status shown on completion
 - **Tool results** — tool use/result pairs, thinking content, Bash exit codes, and error/success indicators in batched output
+- **Tool-call visibility toggle** — `CCGRAM_HIDE_TOOL_CALLS=true` globally hides `tool_use`/`tool_result` messages; `/toolcalls` cycles per-window (`default → shown → hidden`). Hook events (Stop, errors, subagent updates) bypass the gate
 - **Entity-based formatting** — markdown converted to plain text + MessageEntity offsets; automatic plain text fallback, no parse errors
 
 ### Session Management
@@ -108,7 +110,7 @@ graph TB
     direction LR
     C["🟠 Claude Code\nhook events · resume · JSONL"]
     X["🧩 Codex CLI\nresume · continue · JSONL"]
-    G["♊ Gemini CLI\nresume · continue · JSON"]
+    G["♊ Gemini CLI\nresume · continue · JSONL"]
     P["🥧 Pi\nresume · continue · JSONL"]
     S["🐚 Shell\nnl→command · raw mode"]
   end
@@ -231,27 +233,29 @@ Open your Telegram group, create a new topic, send a message — a directory bro
 
 ## Configuration Reference
 
-| Variable / Flag                | Default           | Description                                                   |
-| ------------------------------ | ----------------- | ------------------------------------------------------------- |
-| `TELEGRAM_BOT_TOKEN`           | _(required)_      | Bot token from @BotFather (env only)                          |
-| `ALLOWED_USERS`                | _(required)_      | Comma-separated Telegram user IDs                             |
-| `CCGRAM_DIR`                   | `~/.ccgram`       | Config and state directory                                    |
-| `CCGRAM_PROVIDER`              | `claude`          | Default provider (`claude`, `codex`, `gemini`, `pi`, `shell`) |
-| `CCGRAM_<NAME>_COMMAND`        | _(from provider)_ | Override launch command per provider                          |
-| `CCGRAM_GROUP_ID`              | _(all groups)_    | Restrict to one Telegram group                                |
-| `CCGRAM_LLM_PROVIDER`          | _(disabled)_      | LLM for shell command generation + completion summaries       |
-| `CCGRAM_LLM_API_KEY`           | _(empty)_         | LLM API key (env only)                                        |
-| `CCGRAM_WHISPER_PROVIDER`      | _(disabled)_      | Whisper provider for voice transcription (`openai`, `groq`)   |
-| `CCGRAM_LIVE_VIEW_INTERVAL`    | `5`               | Live view refresh interval in seconds                         |
-| `CCGRAM_LIVE_VIEW_TIMEOUT`     | `300`             | Live view auto-stop timeout in seconds                        |
-| `CCGRAM_SEND_SEARCH_DEPTH`     | `5`               | Max directory depth for `/send` file search                   |
-| `CCGRAM_SEND_MAX_RESULTS`      | `50`              | Max file results returned by `/send` search                   |
-| `AUTOCLOSE_DONE_MINUTES`       | `30`              | Auto-close completed topics after N minutes                   |
-| `AUTOCLOSE_DEAD_MINUTES`       | `10`              | Auto-close dead sessions after N minutes                      |
-| `CCGRAM_PANE_LIFECYCLE_NOTIFY` | `false`           | Default for per-window pane create/close notifications        |
-| `CCGRAM_MINIAPP_BASE_URL`      | _(disabled)_      | Externally reachable HTTPS URL for the Mini App dashboard     |
-| `CCGRAM_MINIAPP_HOST`          | `127.0.0.1`       | Local aiohttp bind host for the Mini App server               |
-| `CCGRAM_MINIAPP_PORT`          | `8765`            | Local aiohttp bind port for the Mini App server               |
+| Variable / Flag                | Default           | Description                                                                |
+| ------------------------------ | ----------------- | -------------------------------------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN`           | _(required)_      | Bot token from @BotFather (env only)                                       |
+| `ALLOWED_USERS`                | _(required)_      | Comma-separated Telegram user IDs                                          |
+| `CCGRAM_DIR`                   | `~/.ccgram`       | Config and state directory                                                 |
+| `CCGRAM_PROVIDER`              | `claude`          | Default provider (`claude`, `codex`, `gemini`, `pi`, `shell`)              |
+| `CCGRAM_<NAME>_COMMAND`        | _(from provider)_ | Override launch command per provider                                       |
+| `CCGRAM_GROUP_ID`              | _(all groups)_    | Restrict to one Telegram group                                             |
+| `CCGRAM_STATUS_MODE`           | `system`          | Topic emoji color scheme: `system` (green=working) or `user` (green=ready) |
+| `CCGRAM_HIDE_TOOL_CALLS`       | `false`           | Global default for hiding `tool_use`/`tool_result` messages                |
+| `CCGRAM_LLM_PROVIDER`          | _(disabled)_      | LLM for shell command generation + completion summaries                    |
+| `CCGRAM_LLM_API_KEY`           | _(empty)_         | LLM API key (env only)                                                     |
+| `CCGRAM_WHISPER_PROVIDER`      | _(disabled)_      | Whisper provider for voice transcription (`openai`, `groq`)                |
+| `CCGRAM_LIVE_VIEW_INTERVAL`    | `5`               | Live view refresh interval in seconds                                      |
+| `CCGRAM_LIVE_VIEW_TIMEOUT`     | `300`             | Live view auto-stop timeout in seconds                                     |
+| `CCGRAM_SEND_SEARCH_DEPTH`     | `5`               | Max directory depth for `/send` file search                                |
+| `CCGRAM_SEND_MAX_RESULTS`      | `50`              | Max file results returned by `/send` search                                |
+| `AUTOCLOSE_DONE_MINUTES`       | `30`              | Auto-close completed topics after N minutes                                |
+| `AUTOCLOSE_DEAD_MINUTES`       | `10`              | Auto-close dead sessions after N minutes                                   |
+| `CCGRAM_PANE_LIFECYCLE_NOTIFY` | `false`           | Default for per-window pane create/close notifications                     |
+| `CCGRAM_MINIAPP_BASE_URL`      | _(disabled)_      | Externally reachable HTTPS URL for the Mini App dashboard                  |
+| `CCGRAM_MINIAPP_HOST`          | `127.0.0.1`       | Local aiohttp bind host for the Mini App server                            |
+| `CCGRAM_MINIAPP_PORT`          | `8765`            | Local aiohttp bind port for the Mini App server                            |
 
 Full reference: **[docs/guides.md](docs/guides.md#configuration)**
 

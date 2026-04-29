@@ -86,6 +86,8 @@ When ccgram starts inside an existing tmux session (i.e. `$TMUX` is set) and no 
 - State files: `state.json` (thread bindings), `session_map.json` (hook-generated), `events.jsonl` (hook events), `monitor_state.json` (byte offsets).
 - Project structure: handlers in `src/ccgram/handlers/`, core modules in `src/ccgram/`, optional Mini App backend in `src/ccgram/miniapp/`, tests mirror source under `tests/ccgram/`.
 - Pane lifecycle: `CCGRAM_PANE_LIFECYCLE_NOTIFY` (default `false`) sets the per-window default for pane create/close notifications; toggle per-window via the `/panes` keyboard.
+- Topic emoji color scheme: `CCGRAM_STATUS_MODE` (`system` default or `user`) controls which color maps to active vs idle. `system`: green=working, yellow=idle (default, system POV). `user`: green=idle/ready, yellow=working (user POV: green=ready for me). Invalid values fall back to `system`.
+- Tool-call visibility: `CCGRAM_HIDE_TOOL_CALLS` (default `false`) globally suppresses `tool_use`/`tool_result` messages in Telegram. Per-window override via `WindowState.tool_call_visibility` (`default`/`shown`/`hidden`) takes precedence; cycle via the status bar toggle.
 - Mini App (optional, v3.0+): `CCGRAM_MINIAPP_BASE_URL` (externally reachable HTTPS URL — Mini App is fully disabled until set), `CCGRAM_MINIAPP_HOST` (default `127.0.0.1`), `CCGRAM_MINIAPP_PORT` (default `8765`). Server binds locally; expects external TLS termination + reverse proxy.
 
 ## Provider Configuration
@@ -122,8 +124,8 @@ When creating a topic via the directory browser, users can choose the provider (
 | Hook events      | Yes (all supported event types) | No                 | No                          | No                       | No                          |
 | Resume           | Yes (`--resume`)                | Yes (`resume`)     | Yes (`--resume idx/latest`) | Yes (`--session <path>`) | No                          |
 | Continue         | Yes                             | Yes                | Yes                         | Yes                      | No                          |
-| Transcript       | JSONL                           | JSONL              | JSON (whole-file read)      | JSONL (v3)               | None                        |
-| Incremental read | Yes                             | Yes                | No (whole-file JSON)        | Yes                      | No                          |
+| Transcript       | JSONL                           | JSONL              | JSONL (incremental)         | JSONL (v3)               | None                        |
+| Incremental read | Yes                             | Yes                | Yes                         | Yes                      | No                          |
 | Commands         | Yes                             | Yes                | Yes                         | Yes (builtins + skills)  | No                          |
 | Status detection | Hook events + pyte + spinner    | Activity heuristic | Pane title + interactive UI | Transcript activity      | Shell prompt idle detection |
 | YOLO auto-accept | Yes                             | No                 | No                          | No                       | No                          |
