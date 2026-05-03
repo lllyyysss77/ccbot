@@ -4,11 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [3.0.3] - 2026-05-03
+
+### Documentation
+- Update docs for CCGRAM_STATUS_MODE, tool-call visibility, and Gemini JSONL support
+- Add modularity review and round-4 decouple plan
+
 ## [3.0.2] - 2026-04-29
 
 ### Added
 - Add toggle to suppress tool-call messages ([#65](https://github.com/alexei-led/ccgram/pull/65))
 - Add CCGRAM_STATUS_MODE for configurable topic emoji color scheme ([#68](https://github.com/alexei-led/ccgram/pull/68))
+
+
+### Documentation
+- Update CHANGELOG.md for v3.0.2
 
 
 ### Fixed
