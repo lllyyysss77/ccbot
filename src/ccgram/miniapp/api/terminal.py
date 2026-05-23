@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import WSMsgType, web
 
+from ...utils import log_throttled
 from ..auth import (
     InvalidTokenError,
     TokenPayload,
@@ -198,7 +199,7 @@ async def _authenticate_websocket(
         if init_data_user_id(params) != payload.user_id:
             raise InvalidTokenError("user mismatch")
     except InvalidTokenError as exc:
-        logger.info("rejected ws auth: %s", exc)
+        logger.debug("rejected ws auth: %s", exc)
         await ws.close(code=_WS_AUTH_FAILED_CODE, message=b"auth failed")
         return False
     return True
@@ -217,7 +218,7 @@ async def _terminal_handler(request: web.Request) -> web.StreamResponse:
     try:
         payload = verify_token(token, bot_token=bot_token)
     except InvalidTokenError as exc:
-        logger.info("rejected terminal websocket token: %s", exc)
+        logger.debug("rejected terminal websocket token: %s", exc)
         return web.Response(status=403, text="invalid or expired token")
 
     pane_id = (request.query.get("pane") or "").strip() or None
@@ -282,7 +283,7 @@ async def _panes_handler(request: web.Request) -> web.Response:
             bot_token=bot_token, token=token, init_data=init_data
         )
     except InvalidTokenError as exc:
-        logger.info("rejected panes list token: %s", exc)
+        logger.debug("rejected panes list token: %s", exc)
         return web.Response(status=403, text="invalid or expired token")
 
     try:
@@ -318,15 +319,28 @@ async def _stream_loop(
                     pane_capture(window_id, pane_id), timeout=_CAPTURE_TIMEOUT
                 )
         except TimeoutError:
-            logger.warning(
-                "terminal capture timeout for %s pane=%s", window_id, pane_id
+            # Throttled: fires every `interval` (~0.2s) for a stuck/gone pane.
+            # The client still gets an error frame each tick; the log need not.
+            log_throttled(
+                logger,
+                f"term-capture-timeout:{window_id}:{pane_id}",
+                "terminal capture timeout for %s pane=%s",
+                window_id,
+                pane_id,
             )
             await _send_json(ws, {"type": "error", "message": "capture timeout"})
             await asyncio.sleep(interval)
             continue
         except Exception:  # noqa: BLE001 — capture failure must not kill stream
-            logger.exception(
-                "terminal capture failed for %s pane=%s", window_id, pane_id
+            # Throttled: same per-tick cadence. The underlying capture path
+            # (tmux_manager) already logs the specific tmux error; this is a
+            # backstop, and the client gets an error frame regardless.
+            log_throttled(
+                logger,
+                f"term-capture-failed:{window_id}:{pane_id}",
+                "terminal capture failed for %s pane=%s",
+                window_id,
+                pane_id,
             )
             await _send_json(ws, {"type": "error", "message": "capture failed"})
             await asyncio.sleep(interval)

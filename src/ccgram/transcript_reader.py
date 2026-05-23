@@ -60,11 +60,21 @@ def _resolve_provider_for_file(window_id: str, file_path: Path) -> Any:
         and provider.capabilities.supports_hook
         and registry.is_valid(inferred)
     ):
-        logger.warning(
+        # Throttled debug, not warning: this read-path observation repeats every
+        # poll until session_map corrects the in-memory state. The read itself
+        # self-heals (we return the inferred provider below), and when the hook
+        # is functional session_map._sync_window_from_session_map emits the
+        # authoritative WARNING on the state mutation. Caveat: if the hook is
+        # broken so session_map never updates, that correction (and its WARNING)
+        # never fires and this stays debug-only — accepted, since the read still
+        # works and a per-poll WARNING here would just flood.
+        log_throttled(
+            logger,
+            f"provider-mismatch:{window_id}",
             "Provider mismatch for window %s: state=%s transcript=%s; using %s",
             window_id,
             current,
-            file_path,
+            str(file_path),
             inferred,
         )
         return registry.get(inferred)
@@ -338,7 +348,9 @@ class TranscriptReader:
                             )
 
                 except (json.JSONDecodeError, OSError) as e:
-                    logger.debug("Error reading index %s: %s", index_file, e)
+                    # Degraded discovery: index unreadable, falling back to a
+                    # glob scan below. Worth surfacing — not a per-poll hot path.
+                    logger.warning("Error reading index %s: %s", index_file, e)
 
             try:
                 for jsonl_file in project_dir.glob("*.jsonl"):
@@ -367,6 +379,6 @@ class TranscriptReader:
                         )
                     )
             except OSError as e:
-                logger.debug("Error scanning jsonl files in %s: %s", project_dir, e)
+                logger.warning("Error scanning jsonl files in %s: %s", project_dir, e)
 
         return sessions

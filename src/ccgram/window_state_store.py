@@ -345,7 +345,7 @@ class WindowStateStore:
         state = self.get_window_state(window_id)
         state.session_id = ""
         self._schedule_save()
-        logger.info("Cleared session for window_id %s", window_id)
+        logger.debug("Cleared session for window_id %s", window_id)
 
     def set_provider_manual_override(self, window_id: str, *, value: bool) -> None:
         """Mark or clear the provider manual-override flag. No-op when unchanged."""
@@ -627,8 +627,9 @@ class WindowStateStore:
         if not stale:
             return False
         for wid in stale:
-            logger.info("Pruning stale window_state: %s", wid)
+            logger.debug("Pruning stale window_state: %s", wid)
             del self.window_states[wid]
+        logger.info("Pruned %d stale window_state(s)", len(stale))
         self._schedule_save()
         return True
 
