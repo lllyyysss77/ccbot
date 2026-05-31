@@ -1,4 +1,3 @@
-import socket
 from pathlib import Path
 
 import pytest
@@ -46,15 +45,6 @@ class TestConfigValid:
         monkeypatch.setenv("CCGRAM_GROUP_ID", "-1001234567890")
         cfg = Config()
         assert cfg.group_id == -1001234567890
-
-    def test_instance_name_defaults_to_hostname(self):
-        cfg = Config()
-        assert cfg.instance_name == socket.gethostname()
-
-    def test_instance_name_from_env(self, monkeypatch):
-        monkeypatch.setenv("CCGRAM_INSTANCE_NAME", "bot-1")
-        cfg = Config()
-        assert cfg.instance_name == "bot-1"
 
 
 @pytest.mark.usefixtures("_base_env")

@@ -15,9 +15,8 @@ import pytest
 # CCGRAM_GROUP_ID, CCGRAM_CLAUDE_COMMAND, MONITOR_POLL_INTERVAL, … which would
 # otherwise leak into tests asserting config defaults and into import-time
 # state like bot._group_filter). Cleared before the config singleton is built.
-# Both the CCGRAM_ prefix and the legacy CCBOT_ fallback (Config._env_with_fallback)
-# are scrubbed, plus the non-prefixed vars Config reads directly.
-_CONFIG_ENV_PREFIXES = ("CCGRAM_", "CCBOT_")
+# The CCGRAM_ prefix is scrubbed, plus the non-prefixed vars Config reads directly.
+_CONFIG_ENV_PREFIXES = ("CCGRAM_",)
 _NON_PREFIXED_CONFIG_ENV = (
     "AUTOCLOSE_DEAD_MINUTES",
     "AUTOCLOSE_DONE_MINUTES",

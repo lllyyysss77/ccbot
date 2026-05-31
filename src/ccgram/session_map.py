@@ -39,7 +39,6 @@ from .window_resolver import is_window_id
 
 logger = structlog.get_logger()
 
-_LEGACY_SESSION_PREFIX = "ccbot:"
 _DEFAULT_PRIMARY_SESSION_GRACE_SEC = 60.0
 
 
@@ -159,7 +158,6 @@ def effective_session_map_info(
 def parse_session_map(raw: dict[str, Any], prefix: str) -> dict[str, dict[str, str]]:
     """Parse session_map.json entries matching a tmux session prefix.
 
-    Also matches legacy "ccbot:" prefix keys when the current prefix is "ccgram:".
     Returns {window_name: {"session_id": ..., "cwd": ...}} for matching entries.
 
     Safe to call from a clean interpreter (no SessionManager wired): the
@@ -169,14 +167,10 @@ def parse_session_map(raw: dict[str, Any], prefix: str) -> dict[str, dict[str, s
     the result also incorporates the in-memory primary-session preference.
     """
     result: dict[str, dict[str, str]] = {}
-    legacy_prefix = _LEGACY_SESSION_PREFIX if prefix.startswith("ccgram:") else ""
     for key, info in raw.items():
-        if key.startswith(prefix):
-            window_name = key[len(prefix) :]
-        elif legacy_prefix and key.startswith(legacy_prefix):
-            window_name = key[len(legacy_prefix) :]
-        else:
+        if not key.startswith(prefix):
             continue
+        window_name = key[len(prefix) :]
         if not isinstance(info, dict):
             continue
         effective = effective_session_map_info(window_name, info)
@@ -396,26 +390,6 @@ class SessionMapSync:
         atomic_write_json(config.session_map_file, raw)
         if changed_state:
             self._schedule_save()
-
-    def get_session_map_window_ids(self) -> set[str]:
-        """Read session_map.json and return window IDs tracked by ccgram.
-
-        Native windows are stripped to their @id form.
-        """
-        if not config.session_map_file.exists():
-            return set()
-        try:
-            raw = json.loads(config.session_map_file.read_text())
-        except (json.JSONDecodeError, OSError):  # fmt: skip
-            return set()
-        prefix = f"{config.tmux_session_name}:"
-        result: set[str] = set()
-        for key in raw:
-            if key.startswith(prefix):
-                wid = key[len(prefix) :]
-                if is_window_id(wid):
-                    result.add(wid)
-        return result
 
     def register_hookless_session(
         self,

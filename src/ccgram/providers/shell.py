@@ -38,12 +38,10 @@ class ShellProvider(JsonlProvider):
         name="shell",
         launch_command="",
         supports_hook=False,
-        supports_hook_events=False,
         supports_resume=False,
         supports_continue=False,
         supports_structured_transcript=False,
         supports_incremental_read=False,
-        transcript_format="plain",
         chat_first_command_path=True,
     )
 

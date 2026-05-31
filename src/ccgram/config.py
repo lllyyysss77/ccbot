@@ -10,7 +10,6 @@ Key class: Config (singleton instantiated as `config`).
 
 import structlog
 import os
-import socket
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,18 +17,6 @@ from dotenv import load_dotenv
 from .utils import ccgram_dir
 
 logger = structlog.get_logger()
-
-
-def _env_with_fallback(new_name: str, old_name: str, default: str = "") -> str:
-    """Read env var with fallback to legacy CCBOT_* name."""
-    val = os.getenv(new_name)
-    if val is not None:
-        return val
-    val = os.getenv(old_name)
-    if val is not None:
-        logger.warning("%s is deprecated, use %s instead", old_name, new_name)
-        return val
-    return default
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -117,7 +104,7 @@ class Config:
         )
 
         # Multi-instance support
-        group_id_str = _env_with_fallback("CCGRAM_GROUP_ID", "CCBOT_GROUP_ID")
+        group_id_str = os.getenv("CCGRAM_GROUP_ID")
         if group_id_str:
             try:
                 self.group_id: int | None = int(group_id_str)
@@ -126,42 +113,23 @@ class Config:
         else:
             self.group_id = None
 
-        self.instance_name: str = (
-            _env_with_fallback("CCGRAM_INSTANCE_NAME", "CCBOT_INSTANCE_NAME")
-            or socket.gethostname()
-        )
-
         # Provider selection
-        self.provider_name: str = _env_with_fallback(
-            "CCGRAM_PROVIDER", "CCBOT_PROVIDER", "claude"
-        )
+        self.provider_name: str = os.getenv("CCGRAM_PROVIDER", "claude")
 
         # Directory browser: show hidden (dot) directories
-        self.show_hidden_dirs: bool = _env_with_fallback(
-            "CCGRAM_SHOW_HIDDEN_DIRS", "CCBOT_SHOW_HIDDEN_DIRS"
+        self.show_hidden_dirs: bool = os.getenv(
+            "CCGRAM_SHOW_HIDDEN_DIRS", ""
         ).lower() in ("1", "true", "yes")
 
         # Ack reaction: react to forwarded messages with an emoji (empty = disabled)
-        self.ack_reaction: str = _env_with_fallback(
-            "CCGRAM_ACK_REACTION", "CCBOT_ACK_REACTION"
-        )
+        self.ack_reaction: str = os.getenv("CCGRAM_ACK_REACTION", "")
 
         # Whisper transcription
-        self.whisper_provider: str = _env_with_fallback(
-            "CCGRAM_WHISPER_PROVIDER", "CCBOT_WHISPER_PROVIDER"
-        )
-        self.whisper_api_key: str = _env_with_fallback(
-            "CCGRAM_WHISPER_API_KEY", "CCBOT_WHISPER_API_KEY"
-        )
-        self.whisper_base_url: str = _env_with_fallback(
-            "CCGRAM_WHISPER_BASE_URL", "CCBOT_WHISPER_BASE_URL"
-        )
-        self.whisper_model: str = _env_with_fallback(
-            "CCGRAM_WHISPER_MODEL", "CCBOT_WHISPER_MODEL"
-        )
-        self.whisper_language: str = _env_with_fallback(
-            "CCGRAM_WHISPER_LANGUAGE", "CCBOT_WHISPER_LANGUAGE"
-        )
+        self.whisper_provider: str = os.getenv("CCGRAM_WHISPER_PROVIDER", "")
+        self.whisper_api_key: str = os.getenv("CCGRAM_WHISPER_API_KEY", "")
+        self.whisper_base_url: str = os.getenv("CCGRAM_WHISPER_BASE_URL", "")
+        self.whisper_model: str = os.getenv("CCGRAM_WHISPER_MODEL", "")
+        self.whisper_language: str = os.getenv("CCGRAM_WHISPER_LANGUAGE", "")
 
         # Voice replies (text-to-speech)
         # CCGRAM_TTS_PROVIDER: empty = disabled; "edge" = edge-tts; "openai" = OpenAI TTS

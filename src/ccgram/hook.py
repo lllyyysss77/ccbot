@@ -50,8 +50,6 @@ def _claude_settings_file() -> Path:
 _CURRENT_HOOK_MARKER = "ccgram.main hook"
 # Older installs used the console script name directly.
 _PATH_HOOK_MARKER = "ccgram hook"
-# Legacy marker from pre-rename ccbot — used for detection and cleanup.
-_LEGACY_HOOK_MARKER = "ccbot hook"
 
 # Expected number of parts when parsing tmux display-message output.
 # Minimum is 3 (session_name\t@id\twindow_name); a fourth pane_tty field is
@@ -134,8 +132,7 @@ def _is_current_hook_command(command: str) -> bool:
 def _is_any_ccgram_hook_command(command: str) -> bool:
     """Return True for current, old, or legacy hook command styles."""
     return any(
-        marker in command
-        for marker in (_CURRENT_HOOK_MARKER, _PATH_HOOK_MARKER, _LEGACY_HOOK_MARKER)
+        marker in command for marker in (_CURRENT_HOOK_MARKER, _PATH_HOOK_MARKER)
     )
 
 
@@ -160,7 +157,7 @@ def _has_matching_hook(
 
 
 def _has_ccgram_hook(settings: dict, event_type: str) -> bool:
-    """Check if ccgram hook (or legacy ccbot hook) is installed."""
+    """Check if ccgram hook is installed."""
     return _has_matching_hook(settings, event_type, _is_any_ccgram_hook_command)
 
 

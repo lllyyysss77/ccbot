@@ -67,7 +67,6 @@ _FLAG_TO_ENV: list[tuple[str, str]] = [
     ("tmux_session", "TMUX_SESSION_NAME"),
     ("monitor_interval", "MONITOR_POLL_INTERVAL"),
     ("group_id", "CCGRAM_GROUP_ID"),
-    ("instance_name", "CCGRAM_INSTANCE_NAME"),
     ("autoclose_done", "AUTOCLOSE_DONE_MINUTES"),
     ("autoclose_dead", "AUTOCLOSE_DEAD_MINUTES"),
     ("provider", "CCGRAM_PROVIDER"),
@@ -145,12 +144,6 @@ def apply_args_to_env(**kwargs: object) -> None:
     default=None,
     envvar="CCGRAM_GROUP_ID",
     help="Restrict to one Telegram group.",
-)
-@click.option(
-    "--instance-name",
-    default=None,
-    envvar="CCGRAM_INSTANCE_NAME",
-    help="Display label for multi-instance.",
 )
 @click.option(
     "--autoclose-done",

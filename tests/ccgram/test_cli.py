@@ -153,7 +153,6 @@ class TestApplyArgsToEnv:
             tmux_session="s",
             monitor_interval=3.0,
             group_id=99,
-            instance_name="n",
             autoclose_done=10,
             autoclose_dead=5,
         )
@@ -162,7 +161,6 @@ class TestApplyArgsToEnv:
         assert os.environ["TMUX_SESSION_NAME"] == "s"
         assert os.environ["MONITOR_POLL_INTERVAL"] == "3.0"
         assert os.environ["CCGRAM_GROUP_ID"] == "99"
-        assert os.environ["CCGRAM_INSTANCE_NAME"] == "n"
         assert os.environ["AUTOCLOSE_DONE_MINUTES"] == "10"
         assert os.environ["AUTOCLOSE_DEAD_MINUTES"] == "5"
 
