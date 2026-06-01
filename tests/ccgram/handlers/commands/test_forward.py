@@ -88,6 +88,11 @@ class TestForwardCommandResolution:
                 new_callable=AsyncMock,
                 return_value=(True, ""),
             ) as self.mock_send_to_window,
+            patch(
+                f"{_FW}.send_followup_to_window",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as self.mock_send_followup_to_window,
             patch(f"{_FW}.tmux_manager", self.mock_tm),
             patch(
                 f"{_FW}.get_provider_for_window",
@@ -160,6 +165,33 @@ class TestForwardCommandResolution:
         await forward_command_handler(update, _make_context())
 
         self.mock_send_to_window.assert_called_once_with("@1", "/unknown_thing")
+
+    async def test_followup_on_non_pi_provider_forwarded_as_is(self) -> None:
+        update = _make_update(text="/followup run tests")
+        await forward_command_handler(update, _make_context())
+
+        self.mock_send_to_window.assert_called_once_with("@1", "/followup run tests")
+        self.mock_send_followup_to_window.assert_not_called()
+
+    async def test_pi_followup_queues_followup_message(self) -> None:
+        self.mock_provider.capabilities.name = "pi"
+        update = _make_update(text="/followup run tests")
+        await forward_command_handler(update, _make_context())
+
+        self.mock_send_followup_to_window.assert_called_once_with("@1", "run tests")
+        self.mock_send_to_window.assert_not_called()
+        reply_text = update.message.reply_text.call_args[0][0]
+        assert reply_text == "⏭️ [project] Follow-up queued."
+
+    async def test_pi_followup_requires_message(self) -> None:
+        self.mock_provider.capabilities.name = "pi"
+        update = _make_update(text="/followup")
+        await forward_command_handler(update, _make_context())
+
+        self.mock_send_followup_to_window.assert_not_called()
+        self.mock_send_to_window.assert_not_called()
+        reply_text = update.message.reply_text.call_args[0][0]
+        assert "Usage: /followup <message>" in reply_text
 
     async def test_cross_provider_command_forwarded_to_provider(self) -> None:
         update = _make_update(text="/cost")

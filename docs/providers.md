@@ -63,7 +63,7 @@ Each provider exposes its own slash commands to the Telegram menu. Examples:
 - **Claude**: `/clear`, `/compact`, `/cost`, `/doctor`, `/permissions`...
 - **Codex**: `/model`, `/mode`, `/status`, `/diff`, `/compact`, `/mcp`...
 - **Gemini**: `/chat`, `/clear`, `/compress`, `/model`, `/memory`, `/vim`...
-- **Pi**: `/clear`, `/compact`, `/export`, `/name`, `/reload`, `/session`, `/share`, `/changelog`... (plus discovered skills/prompts/extensions)
+- **Pi**: `/clear`, `/compact`, `/followup`, `/export`, `/name`, `/reload`, `/session`, `/share`, `/changelog`... (plus discovered skills/prompts/extensions)
 
 ---
 
@@ -166,7 +166,7 @@ Pi transcripts are JSONL files (v3 format) under `~/.pi/agent/sessions/--<encode
 
 ### Commands
 
-Pi exposes a Telegram-safe subset of built-in slash commands (`/clear`, `/changelog`, `/compact`, `/export`, `/name`, `/reload`, `/session`, `/share`). Dynamic discovery surfaces three more sources:
+Pi exposes a Telegram-safe command list that includes built-in Pi slash commands (`/clear`, `/changelog`, `/compact`, `/export`, `/name`, `/reload`, `/session`, `/share`) plus ccgram's Pi-only `/followup <message>` bridge to Pi's Alt+Enter behavior: it queues the message after current work finishes instead of steering the active turn. Dynamic discovery surfaces three more sources:
 
 - **Skills** — `SKILL.md` under `~/.pi/agent/skills/<name>/`, `~/.agents/skills/<name>/`, `<project>/.pi/skills/<name>/`, or `<project>/.agents/skills/<name>/`. Loose `.md` files at the root of `~/.pi/agent/skills/` or `<project>/.pi/skills/` are also picked up.
 - **Prompt templates** — `.md` files under `~/.pi/agent/prompts/` or `<project>/.pi/prompts/` (per-project walk stops at the first `.git` ancestor).

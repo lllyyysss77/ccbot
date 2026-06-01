@@ -930,3 +930,27 @@ async def send_to_window(
     if success:
         return True, f"Sent to {display}"
     return False, "Failed to send keys"
+
+
+async def send_followup_to_window(window_id: str, text: str) -> tuple[bool, str]:
+    """Send text to a Pi window as an Alt+Enter follow-up message."""
+    display = thread_router.get_display_name(window_id)
+    logger.debug(
+        "send_followup_to_window: window_id=%s (%s), text_len=%d",
+        window_id,
+        display,
+        len(text),
+    )
+    window = await tmux_manager.find_window_by_id(window_id)
+    if not window:
+        return False, "Window not found (may have been closed)"
+    if not await tmux_manager.send_keys(
+        window.window_id, text, enter=False, literal=True
+    ):
+        return False, "Failed to send follow-up text"
+    await asyncio.sleep(0.5)
+    if await tmux_manager.send_keys(
+        window.window_id, "M-Enter", enter=False, literal=False
+    ):
+        return True, f"Follow-up queued for {display}"
+    return False, "Failed to send follow-up key"

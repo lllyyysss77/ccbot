@@ -43,6 +43,8 @@ _PI_TELEGRAM_BUILTINS: dict[str, str] = {
     "/copy": "Copy last response to clipboard",
     "/debug": "Show debug information",
     "/export": "Export session to HTML",
+    # ccgram synthetic command: sends Pi's Alt+Enter follow-up shortcut.
+    "/followup": "Queue a follow-up message after current work finishes",
     "/fork": "Fork conversation from an earlier message",
     "/hotkeys": "Show keyboard shortcuts",
     "/import": "Import a previous session",

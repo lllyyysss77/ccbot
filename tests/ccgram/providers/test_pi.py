@@ -580,6 +580,7 @@ class TestCapabilities:
             "/copy",
             "/debug",
             "/export",
+            "/followup",
             "/fork",
             "/hotkeys",
             "/import",
@@ -628,6 +629,7 @@ class TestDiscoverCommands:
         cmds = PiProvider().discover_commands(str(tmp_path / "proj"))
         names = {c.name for c in cmds}
         assert "/clear" in names
+        assert "/followup" in names
         assert "/tree" in names
         assert "/model" in names
         assert "/quit" in names
