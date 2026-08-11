@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ccbot"
+  short_description: "Repo-specific patterns and workflows for ccbot"
+  default_prompt: "Use the ccbot repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
